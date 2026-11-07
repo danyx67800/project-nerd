@@ -1,0 +1,14 @@
+[package]
+name = "nerd-tools"
+description = "Build and maintenance tools for Project Nerd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nerd-tools"
+path = "src/main.rs"
+
+[dependencies]
+nerd-core.workspace = true

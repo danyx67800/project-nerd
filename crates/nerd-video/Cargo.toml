@@ -1,0 +1,11 @@
+[package]
+name = "nerd-video"
+description = "Project Nerd video decoding, thumbnails and display output (AVFoundation)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+nerd-core.workspace = true
+tracing.workspace = true

@@ -1,0 +1,29 @@
+[package]
+name = "nerd-audio"
+description = "Project Nerd realtime audio engine (cpal + symphonia + rubato)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+nerd-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+cpal = "0.18"
+symphonia = { version = "0.6", features = [
+    "aiff",
+    "isomp4",
+    "mp3",
+    "aac",
+    "alac",
+    "flac",
+    "wav",
+    "pcm",
+    "id3v2",
+] }
+rubato = "5"
+crossbeam-queue = "0.3"
+
+[dev-dependencies]
+tempfile.workspace = true

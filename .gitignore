@@ -1,0 +1,13 @@
+/target
+/dist
+.DS_Store
+*.log
+*.dmg
+*.app
+test-media/
+.env
+.env.*
+!.env.example
+ota-private.key
+ota-public.key
+secrets/
