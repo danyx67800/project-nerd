@@ -39,6 +39,7 @@ pub struct Preferences {
     pub update_channel: UpdateChannel,
     pub check_updates_on_startup: bool,
     /// GitHub repository in `owner/repo` form. Empty disables the updater.
+    /// Defaults to the public release repository.
     pub update_repo: String,
     pub recent_projects: Vec<PathBuf>,
     /// Master fader applied on top of the show mix (0.0 - 1.0).
@@ -53,7 +54,7 @@ impl Default for Preferences {
             theme: ThemeMode::Dark,
             update_channel: UpdateChannel::Stable,
             check_updates_on_startup: true,
-            update_repo: String::new(),
+            update_repo: "danyx67800/project-nerd".to_string(),
             recent_projects: Vec::new(),
             master_volume: 1.0,
             confirm_quit_during_show: true,

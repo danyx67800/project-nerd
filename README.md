@@ -100,7 +100,7 @@ Le serate sono file `.nerdshow` salvati dove decide l'utente. L'app funziona off
 
 ## Aggiornamenti
 
-Imposta il repository `owner/repo` in Impostazioni → Aggiornamenti e scegli Stabile o Alpha. Le release devono includere zip, `.sha256` e firma Ed25519. Le chiavi si generano con:
+Il repository pubblico è già impostato su `danyx67800/project-nerd`; puoi cambiarlo in Impostazioni → Aggiornamenti e scegliere Stabile o Alpha. Le release devono includere zip, `.sha256` e firma Ed25519. Le release sono pubblicate su <https://github.com/danyx67800/project-nerd/releases>. Le chiavi si generano con:
 
 ```bash
 cargo run -p nerd-tools -- keygen --out .ota/ota-private.key

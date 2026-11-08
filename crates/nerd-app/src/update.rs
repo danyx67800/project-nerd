@@ -353,6 +353,10 @@ fn check_latest(repo: &str, channel: UpdateChannel) -> Result<Option<ReleaseInfo
         );
     }
     if status == reqwest::StatusCode::NOT_FOUND {
+        // GitHub returns 404 for `/releases/latest` while only prereleases exist.
+        if channel == UpdateChannel::Stable {
+            return Ok(None);
+        }
         return Err(format!("Release non trovata per {repo}."));
     }
     if !status.is_success() {
