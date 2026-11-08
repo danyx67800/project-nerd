@@ -60,17 +60,18 @@ else
 fi
 chmod +x "$APP/Contents/MacOS/$APP_NAME"
 
-# Icon: generated once from scripts/make_icon.py, then expanded to .icns.
-if [ ! -f assets/icon.png ]; then
-  python3 scripts/make_icon.py
+# Icon: source in assets/icon.svg, bundled prebuilt in assets/AppIcon.icns.
+if [ -f assets/AppIcon.icns ]; then
+  cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+else
+  ICONSET=$(mktemp -d)/AppIcon.iconset
+  mkdir -p "$ICONSET"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" assets/icon.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    sips -z "$((size * 2))" "$((size * 2))" assets/icon.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 fi
-ICONSET=$(mktemp -d)/AppIcon.iconset
-mkdir -p "$ICONSET"
-for size in 16 32 128 256 512; do
-  sips -z "$size" "$size" assets/icon.png --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-  sips -z "$((size * 2))" "$((size * 2))" assets/icon.png --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
