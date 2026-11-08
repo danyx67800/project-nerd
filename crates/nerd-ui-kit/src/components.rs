@@ -1317,12 +1317,30 @@ pub fn paint_truncated(
     color: Color32,
     max_width: f32,
 ) {
-    let galley = painter.layout_no_wrap(text.to_string(), font, color);
+    let max_width = max_width.max(8.0);
     let painter = painter.with_clip_rect(Rect::from_min_size(
         pos - Vec2::new(0.0, 2.0),
-        Vec2::new(max_width.max(8.0), 40.0),
+        Vec2::new(max_width, 40.0),
     ));
-    painter.galley(pos, galley, color);
+    let full = painter.layout_no_wrap(text.to_string(), font.clone(), color);
+    if full.size().x <= max_width {
+        painter.galley(pos, full, color);
+        return;
+    }
+    // Keep whole graphemes and make the elision explicit instead of clipping
+    // a word in the middle of a glyph.
+    let mut kept: Vec<char> = text.chars().collect();
+    while !kept.is_empty() {
+        kept.pop();
+        let candidate = format!("{}…", kept.iter().collect::<String>().trim_end());
+        let galley = painter.layout_no_wrap(candidate, font.clone(), color);
+        if galley.size().x <= max_width {
+            painter.galley(pos, galley, color);
+            return;
+        }
+    }
+    let ellipsis = painter.layout_no_wrap("…".to_string(), font, color);
+    painter.galley(pos, ellipsis, color);
 }
 
 pub fn paint_texture_fit(painter: &Painter, texture: &TextureHandle, rect: Rect) {
