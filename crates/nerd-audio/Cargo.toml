@@ -23,6 +23,8 @@ symphonia = { version = "0.6", features = [
     "id3v2",
 ] }
 rubato = "5"
+audioadapter = "5"
+audioadapter-buffers = "5"
 crossbeam-queue = "0.3"
 
 [dev-dependencies]
