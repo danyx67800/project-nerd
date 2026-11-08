@@ -4,6 +4,7 @@ members = [
     "crates/nerd-core",
     "crates/nerd-audio",
     "crates/nerd-video",
+    "crates/nerd-ui-kit",
     "crates/nerd-app",
     "tools/nerd-tools",
 ]
@@ -19,6 +20,7 @@ authors = ["Project Nerd"]
 nerd-core = { path = "crates/nerd-core" }
 nerd-audio = { path = "crates/nerd-audio" }
 nerd-video = { path = "crates/nerd-video" }
+nerd-ui-kit = { path = "crates/nerd-ui-kit" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
