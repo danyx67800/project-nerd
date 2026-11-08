@@ -11,3 +11,4 @@ test-media/
 ota-private.key
 ota-public.key
 secrets/
+.ota/

@@ -4,10 +4,18 @@ App macOS per gestire brani e video musicali durante i concerti di una scuola di
 
 > Versione alpha. L'app non è notarizzata: al primo avvio macOS mostrerà un avviso.
 
+## Stato alpha
+
+Sono completi: modello e state machine, motore audio, libreria, scaletta, titoli,
+pagina Live, impostazioni, OTA firmato, packaging e workflow di release.
+L'integrazione video AVFoundation (elenco schermi, probe, anteprime e playback a
+frame) è l'ultimo blocco ancora in corso; in questa build i file video vengono
+importati e il loro audio è usato dallo show, ma il quadro non è ancora proiettato.
+
 ## Requisiti
 
 - macOS 13 o successivo (Apple Silicon o Intel)
-- Rust stable (1.88+)
+- Rust stable (1.95+)
 - Xcode Command Line Tools per packaging e codec video
 
 ## Avvio in sviluppo
@@ -45,9 +53,12 @@ cargo run -p nerd-tools -- gen-media --out test-media
 
 ```bash
 ./scripts/bundle.sh                 # app ad-hoc firmata
-./scripts/bundle.sh --universal     # richiede i target aarch64 + x86_64
-./scripts/bundle.sh --dmg
+./scripts/bundle.sh --universal     # installa i target aarch64 + x86_64
+OTA_KEY=.ota/ota-private.key ./scripts/bundle.sh --universal --dmg
 ```
+
+Il bundle produce `dist/Project Nerd.app`, lo zip, il file `.sha256` e, se
+`OTA_KEY` è impostata, la firma `.zip.sha256.sig` richiesta dall'updater.
 
 Il bundle identifier è configurabile con `BUNDLE_ID`. Il nome dell'app è definito solo in `crates/nerd-core/src/branding.rs`.
 
@@ -92,7 +103,11 @@ Le serate sono file `.nerdshow` salvati dove decide l'utente. L'app funziona off
 Imposta il repository `owner/repo` in Impostazioni → Aggiornamenti e scegli Stabile o Alpha. Le release devono includere zip, `.sha256` e firma Ed25519. Le chiavi si generano con:
 
 ```bash
-cargo run -p nerd-tools -- keygen --out ota-private.key
+cargo run -p nerd-tools -- keygen --out .ota/ota-private.key
+cargo run -p nerd-tools -- sign --key .ota/ota-private.key --file dist/Project\ Nerd.zip.sha256
+cargo run -p nerd-tools -- verify --key .ota/ota-private.key.pub --file dist/Project\ Nerd.zip.sha256 --sig dist/Project\ Nerd.zip.sha256.sig
 ```
 
-La chiave pubblica va incollata in `crates/nerd-app/src/update.rs`; quella privata nei secret GitHub `OTA_PRIVATE_KEY`.
+`keygen` scrive la chiave privata (`.ota/`, ignorata da git) e quella pubblica in
+`.pub`. La pubblica è già installata in `crates/nerd-app/src/update.rs`; la privata
+deve essere copiata nel secret GitHub `OTA_PRIVATE_KEY` e non va mai committata.

@@ -12,3 +12,5 @@ path = "src/main.rs"
 
 [dependencies]
 nerd-core.workspace = true
+ed25519-dalek = "3"
+hex = "0.4"
