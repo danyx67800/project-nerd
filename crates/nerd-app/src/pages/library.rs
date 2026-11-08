@@ -1,75 +1,155 @@
-//! Media pool: browser on the left, viewer in the middle, inspector on the right.
+//! Library: media browser, real viewer and collapsible inspector.
 
-use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, ScrollArea,
-    Sense, Stroke, TextureHandle, Ui, Vec2,
-};
+use eframe::egui::{self, Align, Layout, Pos2, Rect, RichText, ScrollArea, Sense, Ui, Vec2};
 use nerd_core::library::{MediaAsset, MediaKind};
 
 use crate::app::{LibrarySort, NerdApp};
-use crate::widgets;
+use crate::state::ToastKind;
+use crate::strings;
+use nerd_ui_kit::{
+    body, caption, card, empty_state, labeled_field, menu_button, menu_item, metadata_row,
+    paint_texture_fit, primary_button, screen_placeholder, section, section_label, segmented,
+    status_pill, Button, ButtonVariant, Icon, ListRow, Theme,
+};
 
 pub fn show(app: &mut NerdApp, ui: &mut Ui) {
-    egui::Panel::left("library-browser")
-        .resizable(true)
-        .default_size(338.0)
-        .min_size(270.0)
-        .max_size(460.0)
-        .frame(
-            egui::Frame::new()
-                .fill(app.palette.panel)
-                .inner_margin(egui::Margin::symmetric(14, 12))
-                .stroke(Stroke::new(1.0, app.palette.border)),
-        )
-        .show(ui, |ui| browser(app, ui));
-
-    egui::Panel::right("library-inspector")
-        .resizable(true)
-        .default_size(310.0)
-        .min_size(260.0)
-        .max_size(420.0)
-        .frame(
-            egui::Frame::new()
-                .fill(app.palette.panel)
-                .inner_margin(egui::Margin::same(16))
-                .stroke(Stroke::new(1.0, app.palette.border)),
-        )
-        .show(ui, |ui| inspector(app, ui));
-
+    if app.chrome.library_sidebar {
+        egui::Panel::left("library-browser")
+            .resizable(true)
+            .default_size(280.0)
+            .min_size(220.0)
+            .max_size(420.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(app.palette.colors.panel)
+                    .inner_margin(egui::Margin::symmetric(14, 12)),
+            )
+            .show(ui, |ui| sidebar(app, ui));
+    }
+    if app.chrome.inspector_open {
+        egui::Panel::right("library-inspector")
+            .resizable(true)
+            .default_size(302.0)
+            .min_size(260.0)
+            .max_size(430.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(app.palette.colors.panel)
+                    .inner_margin(egui::Margin::same(0)),
+            )
+            .show(ui, |ui| inspector(app, ui));
+    }
     egui::CentralPanel::default()
         .frame(
             egui::Frame::new()
-                .fill(app.palette.background)
-                .inner_margin(egui::Margin::same(20)),
+                .fill(app.palette.colors.window)
+                .inner_margin(egui::Margin::same(18)),
         )
         .show(ui, |ui| viewer(app, ui));
 }
 
-fn browser(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+fn sidebar(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(crate::strings::PAGE_LIBRARY)
-                .size(22.0)
+            RichText::new("Libreria")
+                .size(15.0)
                 .strong()
-                .color(palette.text),
+                .color(theme.colors.text),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(
-                RichText::new(format!("{} media", app.library.assets.len()))
-                    .size(11.0)
-                    .color(palette.text_muted),
+            let response = menu_button(
+                ui,
+                &theme,
+                "library-add",
+                "",
+                Some(Icon::Plus),
+                ButtonVariant::Plain,
+                28.0,
+                |ui| {
+                    if menu_item(ui, &theme, "Importa file…", Some(Icon::File)).clicked() {
+                        app.import_dialog();
+                    }
+                    if menu_item(ui, &theme, "Importa cartella…", Some(Icon::Folder)).clicked() {
+                        if let Some(folder) = rfd::FileDialog::new()
+                            .set_title("Importa cartella")
+                            .pick_folder()
+                        {
+                            let mut paths = Vec::new();
+                            collect_files(&folder, &mut paths);
+                            app.import_paths(paths);
+                        }
+                    }
+                },
             );
+            response.on_hover_text("Importa file o cartella");
         });
     });
-    ui.add_space(4.0);
-    if crate::widgets::accent_button(ui, palette, "Importa file…")
-        .on_hover_text("Audio: MP3, M4A, WAV, AIFF, FLAC · Video: MP4, MOV, M4V")
-        .clicked()
-    {
-        app.import_dialog();
+    ui.label(
+        RichText::new(format!(
+            "{} file · {} in scaletta",
+            app.library.assets.len(),
+            app.project.songs.len()
+        ))
+        .font(caption())
+        .color(theme.colors.text_secondary),
+    );
+    ui.add_space(10.0);
+    if nerd_ui_kit::search_field(ui, &theme, &mut app.search, "Cerca titolo o artista").clicked() {
+        // Focus is handled by the field itself.
     }
+    ui.add_space(7.0);
+    ui.horizontal(|ui| {
+        let mut filter = app.chrome.library_filter.min(2);
+        if segmented(
+            ui,
+            &theme,
+            "library-filter",
+            &["Tutti", "Audio", "Video"],
+            &mut filter,
+            156.0,
+        )
+        .changed()
+        {
+            app.chrome.library_filter = filter;
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            menu_button(
+                ui,
+                &theme,
+                "library-sort",
+                "",
+                Some(Icon::Sort),
+                ButtonVariant::Plain,
+                28.0,
+                |ui| {
+                    for (sort, label) in [
+                        (LibrarySort::Title, "Titolo"),
+                        (LibrarySort::Duration, "Durata"),
+                        (LibrarySort::Recent, "Recenti"),
+                    ] {
+                        if menu_item(
+                            ui,
+                            &theme,
+                            label,
+                            if app.sort == sort {
+                                Some(Icon::Check)
+                            } else {
+                                None
+                            },
+                        )
+                        .clicked()
+                        {
+                            app.sort = sort;
+                        }
+                    }
+                },
+            )
+            .on_hover_text("Ordina la libreria");
+        });
+    });
     if app.imports_in_flight > 0 {
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.spinner();
             ui.label(
@@ -77,48 +157,26 @@ fn browser(app: &mut NerdApp, ui: &mut Ui) {
                     "Analisi di {} file in corso…",
                     app.imports_in_flight
                 ))
-                .size(11.0)
-                .color(palette.text_muted),
+                .font(caption())
+                .color(theme.colors.text_secondary),
             );
         });
-    } else {
-        ui.label(
-            RichText::new("Trascina file dal Finder in qualsiasi pagina.")
-                .size(10.5)
-                .color(palette.text_muted),
-        );
     }
-    ui.add_space(10.0);
-    ui.add(
-        egui::TextEdit::singleline(&mut app.search)
-            .hint_text("Cerca titolo o artista")
-            .desired_width(f32::INFINITY),
-    );
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("Ordina").size(11.0).color(palette.text_muted));
-        egui::ComboBox::from_id_salt("library-sort")
-            .selected_text(match app.sort {
-                LibrarySort::Title => "Titolo",
-                LibrarySort::Duration => "Durata",
-                LibrarySort::Recent => "Recenti",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut app.sort, LibrarySort::Title, "Titolo");
-                ui.selectable_value(&mut app.sort, LibrarySort::Duration, "Durata");
-                ui.selectable_value(&mut app.sort, LibrarySort::Recent, "Recenti");
-            });
-    });
     ui.add_space(8.0);
 
     let query = app.search.trim().to_lowercase();
+    let filter = app.chrome.library_filter;
     let mut assets: Vec<MediaAsset> = app
         .library
         .assets
         .iter()
         .filter(|asset| {
-            query.is_empty()
-                || asset.display_title().to_lowercase().contains(&query)
-                || asset.artist.to_lowercase().contains(&query)
+            (filter == 0
+                || (filter == 1 && asset.kind == MediaKind::Audio)
+                || (filter == 2 && asset.kind == MediaKind::Video))
+                && (query.is_empty()
+                    || asset.display_title().to_lowercase().contains(&query)
+                    || asset.artist.to_lowercase().contains(&query))
         })
         .cloned()
         .collect();
@@ -134,18 +192,26 @@ fn browser(app: &mut NerdApp, ui: &mut Ui) {
 
     if assets.is_empty() {
         if app.library.assets.is_empty() {
-            widgets::empty_state(
+            empty_state(
                 ui,
-                palette,
-                "La libreria è vuota",
-                "Importa i file audio e video della serata per iniziare.",
+                &theme,
+                Icon::Music,
+                "Nessun media",
+                "Trascina qui i file della serata, oppure importali dal Finder.",
+                |ui| {
+                    if primary_button(ui, &theme, "Importa…").clicked() {
+                        app.import_dialog();
+                    }
+                },
             );
         } else {
-            widgets::empty_state(
+            empty_state(
                 ui,
-                palette,
+                &theme,
+                Icon::Search,
                 "Nessun risultato",
-                "Prova con un altro titolo o artista.",
+                "Prova con un altro titolo, artista o filtro.",
+                |_ui| {},
             );
         }
         return;
@@ -155,544 +221,508 @@ fn browser(app: &mut NerdApp, ui: &mut Ui) {
         .id_salt("library-assets")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for asset in &assets {
-                draw_asset_row(app, ui, asset);
-            }
-            ui.add_space(10.0);
-        });
-}
-
-fn draw_asset_row(app: &mut NerdApp, ui: &mut Ui, asset: &MediaAsset) {
-    let palette = app.palette;
-    let selected = app.selected_asset.as_deref() == Some(asset.id.as_str());
-    let texture = app.thumbnail_for(ui.ctx(), asset);
-    let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 58.0), Sense::click());
-    let hovered = response.hovered();
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(9),
-        if selected {
-            palette.raised
-        } else if hovered {
-            palette.raised.gamma_multiply(0.55)
-        } else {
-            Color32::TRANSPARENT
-        },
-        if selected {
-            Stroke::new(1.0, palette.accent.gamma_multiply(0.55))
-        } else {
-            Stroke::NONE
-        },
-        egui::StrokeKind::Inside,
-    );
-
-    let thumb_rect = Rect::from_min_size(
-        Pos2::new(rect.left() + 8.0, rect.center().y - 18.0),
-        Vec2::new(64.0, 36.0),
-    );
-    ui.painter()
-        .rect_filled(thumb_rect, CornerRadius::same(5), palette.background);
-    if let Some(texture) = &texture {
-        paint_texture_fit(ui, texture, thumb_rect);
-    } else if asset.kind == MediaKind::Video {
-        ui.painter().text(
-            thumb_rect.center(),
-            Align2::CENTER_CENTER,
-            "▶",
-            FontId::proportional(17.0),
-            palette.video,
-        );
-    } else {
-        crate::widgets::waveform(
-            ui.painter(),
-            thumb_rect.shrink2(Vec2::new(4.0, 8.0)),
-            &asset.waveform,
-            palette.accent,
-            None,
-        );
-    }
-
-    let text_x = thumb_rect.right() + 10.0;
-    let missing = !asset.exists();
-    let title_color = if missing {
-        palette.danger
-    } else {
-        palette.text
-    };
-    ui.painter().text(
-        Pos2::new(text_x, rect.top() + 10.0),
-        Align2::LEFT_TOP,
-        truncate(asset.display_title(), 30),
-        FontId::proportional(12.5),
-        title_color,
-    );
-    ui.painter().text(
-        Pos2::new(text_x, rect.top() + 29.0),
-        Align2::LEFT_TOP,
-        if asset.artist.is_empty() {
-            format!(
-                "{} · {}",
-                if asset.kind == MediaKind::Video {
-                    "Video"
+            for asset in assets {
+                let selected = app.selected_asset.as_deref() == Some(asset.id.as_str());
+                let used = app.project.songs.iter().any(|song| {
+                    song.audio.as_ref() == Some(&asset.path)
+                        || song.video.as_ref() == Some(&asset.path)
+                });
+                let missing = !asset.exists();
+                let thumbnail = app.thumbnail_for(ui.ctx(), &asset);
+                let subtitle = if asset.artist.is_empty() {
+                    format!(
+                        "{} · {}",
+                        kind_label(asset.kind),
+                        duration(asset.duration_ms)
+                    )
                 } else {
-                    "Audio"
-                },
-                crate::strings::format_timecode(asset.duration_ms)
-            )
-        } else {
-            asset.artist.clone()
-        },
-        FontId::proportional(10.5),
-        palette.text_muted,
-    );
-    ui.painter().text(
-        Pos2::new(rect.right() - 9.0, rect.top() + 10.0),
-        Align2::RIGHT_TOP,
-        crate::strings::format_timecode(asset.duration_ms),
-        FontId::monospace(10.0),
-        palette.text_muted,
-    );
-
-    if response.clicked() {
-        app.selected_asset = Some(asset.id.clone());
-    }
-    if response.double_clicked() {
-        app.selected_asset = Some(asset.id.clone());
-        app.add_asset_to_show(&asset.id);
-    }
-    let id = asset.id.clone();
-    let title = asset.display_title().to_string();
-    let path = asset.path.clone();
-    response.context_menu(|ui| {
-        if ui.button("Aggiungi alla scaletta").clicked() {
-            app.selected_asset = Some(id.clone());
-            app.add_asset_to_show(&id);
-        }
-        if ui.button("Rivela nel Finder").clicked() {
-            app.reveal_path(&path);
-        }
-        ui.separator();
-        if ui.button("Rimuovi dalla libreria").clicked() {
-            app.library.remove(&id);
-            if app.selected_asset.as_deref() == Some(id.as_str()) {
-                app.selected_asset = app.library.assets.first().map(|a| a.id.clone());
+                    format!("{} · {}", asset.artist, duration(asset.duration_ms))
+                };
+                let response = ListRow {
+                    title: asset.display_title(),
+                    subtitle: &subtitle,
+                    duration: &duration(asset.duration_ms),
+                    icon: kind_icon(asset.kind),
+                    accent: if asset.kind == MediaKind::Video {
+                        theme.colors.video
+                    } else {
+                        theme.colors.accent
+                    },
+                    selected,
+                    badge: used.then_some("In scaletta"),
+                    waveform: (asset.kind == MediaKind::Audio).then_some(asset.waveform.as_slice()),
+                    thumbnail: thumbnail.as_ref(),
+                    trailing_icon: None,
+                    missing,
+                }
+                .show(ui, &theme);
+                if response.clicked() {
+                    app.selected_asset = Some(asset.id.clone());
+                }
+                if response.double_clicked() {
+                    app.selected_asset = Some(asset.id.clone());
+                    app.add_asset_to_show(&asset.id);
+                }
+                let id = asset.id.clone();
+                let path = asset.path.clone();
+                let title = asset.display_title().to_string();
+                response.context_menu(|ui| {
+                    if menu_item(ui, &theme, "Aggiungi alla scaletta", Some(Icon::Plus)).clicked() {
+                        app.selected_asset = Some(id.clone());
+                        app.add_asset_to_show(&id);
+                        ui.close();
+                    }
+                    if menu_item(ui, &theme, "Rivela nel Finder", Some(Icon::Folder)).clicked() {
+                        app.reveal_path(&path);
+                        ui.close();
+                    }
+                    nerd_ui_kit::divider(ui, &theme);
+                    if menu_item(ui, &theme, "Rimuovi dalla libreria", Some(Icon::Trash)).clicked()
+                    {
+                        app.library.remove(&id);
+                        if app.selected_asset.as_deref() == Some(id.as_str()) {
+                            app.selected_asset = app.library.assets.first().map(|a| a.id.clone());
+                        }
+                        app.save_library();
+                        app.toast(format!("Rimosso: {title}"), ToastKind::Info);
+                        ui.close();
+                    }
+                });
             }
-            app.save_library();
-            app.toast(
-                format!("Rimosso dalla libreria: {title}"),
-                crate::state::ToastKind::Info,
-            );
-        }
-    });
+            ui.add_space(12.0);
+        });
 }
 
 fn viewer(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
-    let asset = app
-        .selected_asset
-        .as_ref()
-        .and_then(|id| app.library.find(id))
-        .cloned();
-    let Some(asset) = asset else {
-        widgets::empty_state(
-            ui,
-            palette,
-            "Media pool",
-            "Seleziona un file dalla libreria per vederlo e aggiungerlo alla scaletta.",
-        );
-        return;
-    };
-    let texture = app.thumbnail_for(ui.ctx(), &asset);
-    let missing = !asset.exists();
-
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.label(
-                RichText::new(asset.display_title())
-                    .size(26.0)
-                    .strong()
-                    .color(palette.text),
-            );
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(if asset.artist.is_empty() {
-                        "Artista non indicato".to_string()
-                    } else {
-                        asset.artist.clone()
-                    })
-                    .size(13.0)
-                    .color(palette.text_muted),
-                );
-                widgets::pill(
-                    ui,
-                    if asset.kind == MediaKind::Video {
-                        "VIDEO"
-                    } else {
-                        "AUDIO"
-                    },
-                    if asset.kind == MediaKind::Video {
-                        palette.video
-                    } else {
-                        palette.accent
-                    },
-                );
-                if missing {
-                    widgets::pill(ui, "FILE MANCANTE", palette.danger);
-                }
-            });
-        });
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if crate::widgets::accent_button(ui, palette, "Aggiungi alla scaletta").clicked() {
-                app.add_asset_to_show(&asset.id);
-            }
-            if widgets::ghost_button(ui, palette, "Rivela nel Finder").clicked() {
-                app.reveal_path(&asset.path);
-            }
-        });
-    });
-    ui.add_space(14.0);
-
-    let available = ui.available_size();
-    let height = (available.y * 0.55).clamp(220.0, 440.0);
-    let width = (height * 16.0 / 9.0).min(available.x);
-    let image_rect = Rect::from_center_size(
-        Pos2::new(
-            ui.available_rect_before_wrap().center().x,
-            ui.cursor().top() + height / 2.0,
-        ),
-        Vec2::new(width, height),
-    );
-    let (_, response) = ui.allocate_exact_size(Vec2::new(available.x, height), Sense::hover());
-    let painter = ui.painter().with_clip_rect(image_rect);
-    painter.rect_filled(image_rect, CornerRadius::same(14), Color32::BLACK);
-    if let Some(texture) = &texture {
-        paint_texture_fit_painter(&painter, texture, image_rect);
-    } else {
-        let inner = image_rect.shrink(28.0);
-        painter.rect_filled(inner, CornerRadius::same(8), palette.panel_alt);
-        widgets::waveform(
-            &painter,
-            Rect::from_center_size(
-                inner.center(),
-                Vec2::new(inner.width(), inner.height() * 0.4),
-            ),
-            &asset.waveform,
-            if asset.kind == MediaKind::Video {
-                palette.video
-            } else {
-                palette.accent
-            },
-            None,
-        );
-        painter.text(
-            Pos2::new(inner.center().x, inner.top() + 18.0),
-            Align2::CENTER_TOP,
-            if asset.kind == MediaKind::Video {
-                "Anteprima video non disponibile"
-            } else {
-                "Forma d'onda"
-            },
-            FontId::proportional(14.0),
-            palette.text_muted,
-        );
-    }
-
-    ui.add_space(12.0);
-    egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(12))
-        .inner_margin(egui::Margin::same(16))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                widgets::section_label(ui, palette, "Forma d'onda");
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "{} · {}",
-                            crate::strings::format_timecode(asset.duration_ms),
-                            size_label(asset.file_size)
-                        ))
-                        .size(10.5)
-                        .color(palette.text_muted),
-                    );
-                });
-            });
-            let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), 86.0), Sense::hover());
-            widgets::waveform(
-                ui.painter(),
-                rect,
-                &asset.waveform,
-                if asset.kind == MediaKind::Video {
-                    palette.video
-                } else {
-                    palette.accent
-                },
-                None,
-            );
-        });
-
-    let _ = response;
-    ui.add_space(14.0);
-    ui.horizontal(|ui| {
-        let detail = format!(
-            "{} · {} · {}",
-            match asset.kind {
-                MediaKind::Audio => "Audio",
-                MediaKind::Video => "Video",
-            },
-            asset
-                .path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .unwrap_or("—")
-                .to_uppercase(),
-            crate::strings::format_timecode(asset.duration_ms)
-        );
-        ui.label(RichText::new(detail).size(11.0).color(palette.text_muted));
-        if asset.width > 0 && asset.height > 0 {
-            ui.label(
-                RichText::new(format!("· {}×{}", asset.width, asset.height))
-                    .size(11.0)
-                    .color(palette.text_muted),
-            );
-        }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .button("Ricarica anteprima")
-                .on_hover_text("Rilegge il file e rigenera i metadati")
-                .clicked()
-            {
-                app.import_paths(vec![asset.path.clone()]);
-            }
-        });
-    });
-}
-
-fn inspector(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+    let theme = app.palette;
     let Some(asset) = app
         .selected_asset
         .as_ref()
         .and_then(|id| app.library.find(id))
         .cloned()
     else {
-        ui.label(
-            RichText::new("Nessun media selezionato")
-                .size(12.0)
-                .color(palette.text_muted),
-        );
+        nerd_ui_kit::underlay(ui, &theme, |ui| {
+            ui.set_min_height(ui.available_height().max(240.0));
+            empty_state(
+                ui,
+                &theme,
+                Icon::Library,
+                "Seleziona un media",
+                "Il viewer mostra qui video, onda e metadati. Trascina i file per importarli.",
+                |ui| {
+                    if primary_button(ui, &theme, "Importa…").clicked() {
+                        app.import_dialog();
+                    }
+                },
+            );
+        });
         return;
     };
-    ScrollArea::vertical()
-        .id_salt("library-inspector-scroll")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new("Inspector")
-                    .size(11.0)
-                    .strong()
-                    .color(palette.text_muted),
+
+    let used = app.project.songs.iter().any(|song| {
+        song.audio.as_ref() == Some(&asset.path) || song.video.as_ref() == Some(&asset.path)
+    });
+    ui.label(
+        RichText::new(asset.display_title())
+            .size(22.0)
+            .strong()
+            .color(theme.colors.text),
+    );
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new(if asset.artist.is_empty() {
+                "Artista non indicato"
+            } else {
+                &asset.artist
+            })
+            .font(body())
+            .color(theme.colors.text_secondary),
+        );
+        status_pill(
+            ui,
+            &theme,
+            kind_label(asset.kind),
+            if asset.kind == MediaKind::Video {
+                theme.colors.video
+            } else {
+                theme.colors.accent
+            },
+            Some(kind_icon(asset.kind)),
+        );
+        if !asset.exists() {
+            status_pill(
+                ui,
+                &theme,
+                "File mancante",
+                theme.colors.red,
+                Some(Icon::Warning),
             );
-            ui.add_space(10.0);
-            ui.label(
-                RichText::new(asset.display_title())
-                    .size(17.0)
-                    .strong()
-                    .color(palette.text),
-            );
+        }
+    });
+    ui.add_space(7.0);
+    ui.horizontal_wrapped(|ui| {
+        if Button::new(if used {
+            "Aggiungi di nuovo"
+        } else {
+            "Aggiungi alla scaletta"
+        })
+        .variant(ButtonVariant::Primary)
+        .icon(Icon::Plus)
+        .show(ui, &theme)
+        .clicked()
+        {
+            app.add_asset_to_show(&asset.id);
+        }
+        if nerd_ui_kit::Button::new("Rivela nel Finder")
+            .variant(ButtonVariant::Secondary)
+            .icon(Icon::Folder)
+            .show(ui, &theme)
+            .clicked()
+        {
+            app.reveal_path(&asset.path);
+        }
+    });
+    ui.add_space(10.0);
+
+    let texture = app.thumbnail_for(ui.ctx(), &asset);
+    let available = ui.available_size();
+    let height = (available.y * 0.48).clamp(190.0, 380.0);
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(available.x, height), Sense::hover());
+    let canvas = nerd_ui_kit::fit_rect(rect, 16.0 / 9.0);
+    ui.painter()
+        .rect_filled(canvas, egui::CornerRadius::same(10), theme.colors.blackout);
+    if let Some(texture) = &texture {
+        paint_texture_fit(ui.painter(), texture, canvas);
+    } else if asset.kind == MediaKind::Video {
+        screen_placeholder(
+            ui.painter(),
+            canvas.shrink(18.0),
+            &theme,
+            Icon::Video,
+            "Anteprima video non disponibile",
+        );
+    } else {
+        paint_audio_viewer(ui, canvas, &asset, &theme);
+    }
+    let _ = response;
+    ui.add_space(10.0);
+
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!(
+                "{}  /  {}",
+                strings::format_timecode(0),
+                strings::format_timecode(asset.duration_ms)
+            ))
+            .font(nerd_ui_kit::timecode(11.0))
+            .color(theme.colors.text_secondary),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(
                 RichText::new(if asset.kind == MediaKind::Video {
                     "Video musicale"
                 } else {
                     "Traccia audio"
                 })
-                .size(11.0)
-                .color(palette.text_muted),
+                .font(caption())
+                .color(theme.colors.text_tertiary),
             );
-            ui.add_space(14.0);
+        });
+    });
+    ui.add_space(12.0);
 
-            widgets::section_label(ui, palette, "Metadati");
-            let mut title = asset.title.clone();
-            if ui
-                .add(egui::TextEdit::singleline(&mut title).hint_text("Titolo"))
-                .changed()
-            {
-                if let Some(item) = app.library.assets.iter_mut().find(|a| a.id == asset.id) {
-                    item.title = title;
-                    app.save_library();
-                }
-            }
-            ui.add_space(4.0);
-            let mut artist = asset.artist.clone();
-            if ui
-                .add(egui::TextEdit::singleline(&mut artist).hint_text("Artista"))
-                .changed()
-            {
-                if let Some(item) = app.library.assets.iter_mut().find(|a| a.id == asset.id) {
-                    item.artist = artist;
-                    app.save_library();
-                }
-            }
-            ui.add_space(4.0);
-            let mut album = asset.album.clone();
-            if ui
-                .add(egui::TextEdit::singleline(&mut album).hint_text("Album / progetto"))
-                .changed()
-            {
-                if let Some(item) = app.library.assets.iter_mut().find(|a| a.id == asset.id) {
-                    item.album = album;
-                    app.save_library();
-                }
-            }
-
-            ui.add_space(14.0);
-            widgets::section_label(ui, palette, "File");
-            metadata_row(ui, palette, "Percorso", &asset.path.to_string_lossy());
-            metadata_row(
-                ui,
-                palette,
-                "Durata",
-                &crate::strings::format_timecode(asset.duration_ms),
-            );
-            metadata_row(ui, palette, "Dimensione", &size_label(asset.file_size));
-            if asset.width > 0 {
-                metadata_row(
-                    ui,
-                    palette,
-                    "Risoluzione",
-                    &format!("{} × {}", asset.width, asset.height),
-                );
-            }
-            metadata_row(
-                ui,
-                palette,
-                "Formato",
-                &asset
-                    .path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .unwrap_or("—")
-                    .to_uppercase(),
-            );
-            if !asset.exists() {
-                ui.add_space(6.0);
+    card(ui, &theme, |ui| {
+        ui.horizontal(|ui| {
+            section_label(ui, &theme, "Forma d'onda");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
-                    RichText::new("⚠ Il file non esiste più in questo percorso.")
-                        .size(11.0)
-                        .color(palette.danger),
+                    RichText::new(format!(
+                        "{} · {} · {}",
+                        file_format(&asset),
+                        strings::format_timecode(asset.duration_ms),
+                        size_label(asset.file_size)
+                    ))
+                    .font(caption())
+                    .color(theme.colors.text_secondary),
                 );
-                if ui.button("Ricollega file…").clicked() {
-                    app.relink_dialog();
-                }
-            }
-            ui.add_space(8.0);
-            if ui.button("Rivela nel Finder").clicked() {
-                app.reveal_path(&asset.path);
-            }
-
-            ui.add_space(16.0);
-            widgets::section_label(ui, palette, "Nella serata");
-            let count = app
-                .project
-                .songs
-                .iter()
-                .filter(|song| {
-                    song.audio.as_ref() == Some(&asset.path)
-                        || song.video.as_ref() == Some(&asset.path)
-                })
-                .count();
-            ui.label(
-                RichText::new(if count == 0 {
-                    "Non è ancora in scaletta.".to_string()
-                } else {
-                    format!("Usato in {count} brani della scaletta.")
-                })
-                .size(11.0)
-                .color(palette.text_muted),
-            );
-            ui.add_space(8.0);
-            if crate::widgets::accent_button(ui, palette, "Aggiungi alla scaletta").clicked() {
-                app.add_asset_to_show(&asset.id);
-            }
-            ui.add_space(18.0);
-            if ui
-                .add(
-                    egui::Button::new(
-                        RichText::new("Rimuovi dalla libreria")
-                            .size(11.0)
-                            .color(palette.danger),
-                    )
-                    .frame(false),
-                )
-                .clicked()
-            {
-                let title = asset.display_title().to_string();
-                app.library.remove(&asset.id);
-                app.selected_asset = app.library.assets.first().map(|a| a.id.clone());
-                app.save_library();
-                app.toast(
-                    format!("Rimosso dalla libreria: {title}"),
-                    crate::state::ToastKind::Info,
-                );
-            }
+            });
         });
-}
-
-fn metadata_row(ui: &mut Ui, palette: crate::theme::Palette, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(10.5).color(palette.text_muted));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(truncate(value, 34))
-                        .size(10.5)
-                        .color(palette.text),
-                )
-                .truncate(),
-            )
-            .on_hover_text(value);
-        });
+        let (wave_rect, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 84.0), Sense::hover());
+        ui.painter()
+            .rect_filled(wave_rect, egui::CornerRadius::same(6), theme.colors.well);
+        nerd_ui_kit::waveform(
+            ui.painter(),
+            wave_rect.shrink2(Vec2::new(14.0, 14.0)),
+            &asset.waveform,
+            if asset.kind == MediaKind::Video {
+                theme.colors.video
+            } else {
+                theme.colors.accent
+            },
+            None,
+        );
     });
 }
 
-fn paint_texture_fit(ui: &Ui, texture: &TextureHandle, rect: Rect) {
-    paint_texture_fit_painter(ui.painter(), texture, rect);
-}
-
-fn paint_texture_fit_painter(painter: &egui::Painter, texture: &TextureHandle, rect: Rect) {
-    let size = texture.size_vec2();
-    let aspect = if size.y > 0.0 {
-        size.x / size.y
-    } else {
-        16.0 / 9.0
-    };
-    let container_aspect = rect.width() / rect.height().max(1.0);
-    let dest = if container_aspect > aspect {
-        let height = rect.height();
-        Rect::from_center_size(rect.center(), Vec2::new(height * aspect, height))
-    } else {
-        let width = rect.width();
-        Rect::from_center_size(rect.center(), Vec2::new(width, width / aspect))
-    };
-    painter.image(
-        texture.id(),
-        dest,
-        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-        Color32::WHITE,
+fn paint_audio_viewer(ui: &mut Ui, rect: Rect, asset: &MediaAsset, theme: &Theme) {
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(rect, egui::CornerRadius::same(10), theme.colors.well);
+    let label_rect = Rect::from_min_size(
+        Pos2::new(rect.left() + 22.0, rect.top() + 18.0),
+        Vec2::new(rect.width() - 44.0, 44.0),
+    );
+    painter.text(
+        label_rect.left_top(),
+        egui::Align2::LEFT_TOP,
+        "FORMA D'ONDA",
+        caption(),
+        theme.colors.text_tertiary,
+    );
+    painter.text(
+        Pos2::new(label_rect.left(), label_rect.top() + 20.0),
+        egui::Align2::LEFT_TOP,
+        asset.display_title(),
+        nerd_ui_kit::section_title(),
+        theme.colors.text,
+    );
+    let wave = Rect::from_center_size(
+        Pos2::new(rect.center().x, rect.center().y + 22.0),
+        Vec2::new(rect.width() * 0.78, rect.height() * 0.36),
+    );
+    nerd_ui_kit::waveform(
+        &painter,
+        wave,
+        &asset.waveform,
+        theme.colors.accent,
+        Some(0.0),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(wave.left(), wave.top() - 4.0),
+            Pos2::new(wave.left(), wave.bottom() + 4.0),
+        ],
+        egui::Stroke::new(1.0, theme.colors.text_secondary),
     );
 }
 
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_string()
-    } else {
-        let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
+fn inspector(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
+    ui.painter()
+        .rect_filled(ui.max_rect(), egui::CornerRadius::ZERO, theme.colors.panel);
+    if !app.chrome.inspector_open {
+        return;
     }
+    let Some(asset) = app
+        .selected_asset
+        .as_ref()
+        .and_then(|id| app.library.find(id))
+        .cloned()
+    else {
+        empty_state(
+            ui,
+            &theme,
+            Icon::Info,
+            "Inspector",
+            "Seleziona un file per vedere e modificare i suoi dati.",
+            |_ui| {},
+        );
+        return;
+    };
+
+    ScrollArea::vertical()
+        .id_salt("library-inspector-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("Inspector")
+                            .size(15.0)
+                            .strong()
+                            .color(theme.colors.text),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "{} · {}",
+                            kind_label(asset.kind),
+                            file_format(&asset)
+                        ))
+                        .font(caption())
+                        .color(theme.colors.text_secondary),
+                    );
+                });
+            });
+            ui.add_space(10.0);
+            nerd_ui_kit::divider(ui, &theme);
+            ui.add_space(6.0);
+
+            let id = "library-info";
+            let mut title = asset.title.clone();
+            let mut artist = asset.artist.clone();
+            let mut album = asset.album.clone();
+            let mut changed = false;
+            section(ui, &theme, id, "Info", true, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.set_width((ui.available_width() - 16.0).max(120.0));
+                        labeled_field(ui, &theme, "Titolo", &mut title, "Titolo");
+                        ui.add_space(6.0);
+                        labeled_field(ui, &theme, "Artista", &mut artist, "Artista");
+                        ui.add_space(6.0);
+                        labeled_field(ui, &theme, "Album / progetto", &mut album, "Album");
+                        changed =
+                            title != asset.title || artist != asset.artist || album != asset.album;
+                    });
+                });
+            });
+            if changed {
+                if let Some(item) = app.library.assets.iter_mut().find(|a| a.id == asset.id) {
+                    item.title = title;
+                    item.artist = artist;
+                    item.album = album;
+                }
+                app.save_library();
+            }
+
+            section(ui, &theme, "library-file", "File", true, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.set_width((ui.available_width() - 16.0).max(120.0));
+                        metadata_row(ui, &theme, "Percorso", &asset.path.to_string_lossy());
+                        metadata_row(
+                            ui,
+                            &theme,
+                            "Durata",
+                            &strings::format_timecode(asset.duration_ms),
+                        );
+                        metadata_row(ui, &theme, "Dimensione", &size_label(asset.file_size));
+                        metadata_row(ui, &theme, "Formato", &file_format(&asset));
+                        if asset.width > 0 {
+                            metadata_row(
+                                ui,
+                                &theme,
+                                "Risoluzione",
+                                &format!("{} × {}", asset.width, asset.height),
+                            );
+                        }
+                        if !asset.exists() {
+                            ui.add_space(5.0);
+                            ui.label(
+                                RichText::new("Il file non è più al suo percorso.")
+                                    .font(caption())
+                                    .color(theme.colors.red),
+                            );
+                            if Button::new("Ricollega…")
+                                .variant(ButtonVariant::Secondary)
+                                .show(ui, &theme)
+                                .clicked()
+                            {
+                                app.relink_dialog();
+                            }
+                        }
+                    });
+                });
+            });
+
+            section(ui, &theme, "library-audio", "Audio", true, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.set_width((ui.available_width() - 16.0).max(120.0));
+                        let (rect, _) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), 54.0),
+                            Sense::hover(),
+                        );
+                        ui.painter().rect_filled(
+                            rect,
+                            egui::CornerRadius::same(5),
+                            theme.colors.well,
+                        );
+                        nerd_ui_kit::waveform(
+                            ui.painter(),
+                            rect.shrink2(Vec2::new(8.0, 10.0)),
+                            &asset.waveform,
+                            if asset.kind == MediaKind::Video {
+                                theme.colors.video
+                            } else {
+                                theme.colors.accent
+                            },
+                            None,
+                        );
+                        ui.add_space(6.0);
+                        metadata_row(ui, &theme, "Canali", "Stereo");
+                        metadata_row(ui, &theme, "Campioni", "44,1 kHz");
+                    });
+                });
+            });
+
+            section(ui, &theme, "library-times", "Tempi", true, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.set_width((ui.available_width() - 16.0).max(120.0));
+                        metadata_row(ui, &theme, "Inizio", &strings::format_timecode(0));
+                        metadata_row(
+                            ui,
+                            &theme,
+                            "Fine",
+                            &strings::format_timecode(asset.duration_ms),
+                        );
+                        metadata_row(ui, &theme, "Durata", &duration(asset.duration_ms));
+                    });
+                });
+            });
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                if Button::new("Rimuovi dalla libreria")
+                    .variant(ButtonVariant::Destructive)
+                    .icon(Icon::Trash)
+                    .show(ui, &theme)
+                    .clicked()
+                {
+                    let title = asset.display_title().to_string();
+                    app.library.remove(&asset.id);
+                    app.selected_asset = app.library.assets.first().map(|a| a.id.clone());
+                    app.save_library();
+                    app.toast(format!("Rimosso: {title}"), ToastKind::Info);
+                }
+            });
+            ui.add_space(16.0);
+        });
+}
+
+fn kind_label(kind: MediaKind) -> &'static str {
+    match kind {
+        MediaKind::Audio => "Audio",
+        MediaKind::Video => "Video",
+    }
+}
+
+fn kind_icon(kind: MediaKind) -> Icon {
+    match kind {
+        MediaKind::Audio => Icon::Music,
+        MediaKind::Video => Icon::Video,
+    }
+}
+
+fn duration(ms: u64) -> String {
+    strings::format_timecode(ms)
+}
+
+fn file_format(asset: &MediaAsset) -> String {
+    asset
+        .path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("—")
+        .to_uppercase()
 }
 
 fn size_label(bytes: u64) -> String {
@@ -702,5 +732,19 @@ fn size_label(bytes: u64) -> String {
         format!("{:.1} MB", bytes as f64 / 1_000_000.0)
     } else {
         format!("{:.0} KB", bytes as f64 / 1_000.0)
+    }
+}
+
+fn collect_files(folder: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(&path, out);
+        } else if nerd_core::library::media_kind_for_path(&path).is_some() {
+            out.push(path);
+        }
     }
 }

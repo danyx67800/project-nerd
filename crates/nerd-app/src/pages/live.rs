@@ -1,285 +1,251 @@
-//! The Live console: large transport, countdown, meters and output monitor.
+//! Live console: stage-sized type, GO, output preview and meters.
 
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, ScrollArea,
-    Sense, Stroke, Ui, Vec2,
+    self, Align, Align2, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Sense, Ui, Vec2,
 };
-use nerd_core::model::PlaybackMode;
 use nerd_core::Phase;
 
 use crate::app::NerdApp;
 use crate::output;
 use crate::state::Page;
-use crate::widgets;
+use crate::strings;
+use nerd_ui_kit::{
+    body, caption, icon_button, keycap, primary_button, section_label, segmented, slider,
+    status_pill, toggle, Button, ButtonVariant, Icon, Theme,
+};
 
 pub fn show(app: &mut NerdApp, ui: &mut Ui) {
     egui::Frame::new()
-        .fill(app.palette.background)
-        .inner_margin(egui::Margin::symmetric(18, 14))
+        .fill(app.palette.colors.window)
+        .inner_margin(egui::Margin::same(18))
         .show(ui, |ui| {
             ScrollArea::vertical()
                 .id_salt("live-scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    topbar(app, ui);
+                    header(app, ui);
                     if app.project.songs.is_empty() {
-                        empty_show(app, ui);
+                        empty(app, ui);
                         return;
                     }
                     ui.add_space(12.0);
                     let width = ui.available_width();
-                    if width > 980.0 {
+                    if width >= 1020.0 {
                         ui.horizontal_top(|ui| {
                             ui.allocate_ui_with_layout(
-                                Vec2::new(width * 0.625, 0.0),
+                                Vec2::new(width * 0.62 - 6.0, 0.0),
                                 Layout::top_down(Align::Min),
                                 |ui| {
                                     now_card(app, ui);
                                     ui.add_space(12.0);
-                                    controls_card(app, ui);
+                                    controls(app, ui);
+                                    ui.add_space(12.0);
+                                    meters(app, ui);
                                 },
                             );
                             ui.add_space(12.0);
                             ui.allocate_ui_with_layout(
-                                Vec2::new(width * 0.35, 0.0),
+                                Vec2::new(width * 0.38 - 6.0, 0.0),
                                 Layout::top_down(Align::Min),
                                 |ui| {
                                     next_card(app, ui);
                                     ui.add_space(12.0);
-                                    checklist_card(app, ui);
+                                    output_card(app, ui);
+                                    ui.add_space(12.0);
+                                    background_card(app, ui);
                                 },
                             );
                         });
                     } else {
                         now_card(app, ui);
                         ui.add_space(12.0);
-                        controls_card(app, ui);
+                        controls(app, ui);
                         ui.add_space(12.0);
                         next_card(app, ui);
                         ui.add_space(12.0);
-                        checklist_card(app, ui);
+                        output_card(app, ui);
+                        ui.add_space(12.0);
+                        background_card(app, ui);
                     }
                     ui.add_space(12.0);
-                    lower_cards(app, ui);
+                    checklist(app, ui);
+                    ui.add_space(12.0);
+                    queue(app, ui);
                     ui.add_space(10.0);
-                    shortcuts_strip(ui, app);
+                    shortcuts(ui, &app.palette);
                 });
         });
 }
 
-fn topbar(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+fn header(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(crate::strings::PAGE_LIVE)
-                .size(22.0)
-                .strong()
-                .color(palette.text),
-        );
-        let phase = app.show.phase();
-        let color = match phase {
-            Phase::Playing => palette.accent,
-            Phase::Paused => palette.warning,
-            Phase::Waiting => palette.title,
-            Phase::Panic | Phase::Stopping => palette.danger,
-            Phase::Finished => palette.success,
-            Phase::Idle => palette.text_muted,
-        };
-        widgets::pill(ui, output::phase_label(phase), color);
+        ui.vertical(|ui| {
+            ui.label(
+                RichText::new("Live")
+                    .size(22.0)
+                    .strong()
+                    .color(theme.colors.text),
+            );
+            ui.label(
+                RichText::new(format!("{} · {}", app.project.name, app.project.venue))
+                    .font(caption())
+                    .color(theme.colors.text_secondary),
+            );
+        });
+        ui.add_space(14.0);
         if app.show.background_running() {
-            widgets::pill(
+            status_pill(
                 ui,
+                &theme,
                 if app.show.background_paused() {
                     "Sottofondo in pausa"
                 } else {
-                    "Sottofondo on air"
+                    "Sottofondo"
                 },
-                palette.title,
+                theme.colors.mint,
+                Some(Icon::Waveform),
+            );
+        }
+        if app.project.output.blackout {
+            status_pill(
+                ui,
+                &theme,
+                "Blackout",
+                theme.colors.red,
+                Some(Icon::Blackout),
             );
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .add(
-                    egui::Button::new(
-                        RichText::new(if app.output_open {
-                            "Chiudi uscita"
-                        } else {
-                            "Apri uscita video"
-                        })
-                        .size(11.0)
-                        .color(if app.output_open {
-                            palette.accent
-                        } else {
-                            palette.text
-                        }),
-                    )
-                    .fill(palette.raised)
-                    .stroke(Stroke::new(1.0, palette.border))
-                    .corner_radius(CornerRadius::same(7)),
-                )
-                .clicked()
+            if Button::new(if app.output_open {
+                "Chiudi uscita"
+            } else {
+                "Apri uscita"
+            })
+            .variant(ButtonVariant::Secondary)
+            .icon(Icon::Monitor)
+            .show(ui, &theme)
+            .clicked()
             {
                 app.toggle_output(ui.ctx());
             }
-            if app.project.output.show_titles {
-                widgets::pill(ui, "Titoli on", palette.title);
-            }
-            ui.label(
-                RichText::new(format!("{} · {}", app.project.name, app.project.date))
-                    .size(10.5)
-                    .color(palette.text_muted),
-            );
-        });
-    });
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("Modalità")
-                .size(10.5)
-                .color(palette.text_muted),
-        );
-        for mode in [PlaybackMode::Manual, PlaybackMode::Automatic] {
-            let selected = app.show.mode() == mode;
-            let button =
-                egui::Button::new(RichText::new(widgets::mode_label(mode)).size(11.0).color(
-                    if selected {
-                        Color32::from_rgb(9, 23, 21)
-                    } else {
-                        palette.text
-                    },
-                ))
-                .fill(if selected {
-                    palette.accent
-                } else {
-                    palette.raised
-                })
-                .stroke(Stroke::new(1.0, palette.border))
-                .corner_radius(CornerRadius::same(7))
-                .min_size(Vec2::new(96.0, 26.0));
-            if ui.add(button).clicked() {
-                app.set_show_mode(mode);
-            }
-        }
-        if app.project.show.mode == PlaybackMode::Automatic {
-            let suspended = app.show.auto_suspended();
-            let label = if suspended {
-                "Riprendi automatico"
-            } else {
-                "Sospendi automatico"
+            let mut mode = match app.show.mode() {
+                nerd_core::model::PlaybackMode::Manual => 0,
+                nerd_core::model::PlaybackMode::Automatic => 1,
             };
-            if ui
-                .add(
-                    egui::Button::new(RichText::new(label).size(10.5).color(if suspended {
-                        palette.warning
-                    } else {
-                        palette.text
-                    }))
-                    .fill(palette.raised)
-                    .stroke(Stroke::new(
-                        1.0,
-                        if suspended {
-                            palette.warning.gamma_multiply(0.5)
-                        } else {
-                            palette.border
-                        },
-                    ))
-                    .corner_radius(CornerRadius::same(7)),
-                )
-                .clicked()
+            if segmented(
+                ui,
+                &theme,
+                "live-mode",
+                &["Manuale", "Automatico"],
+                &mut mode,
+                190.0,
+            )
+            .changed()
             {
-                app.toggle_auto_suspend();
-            }
-        }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if app.show.is_counting_down() {
-                widgets::pill(
-                    ui,
-                    format!(
-                        "Countdown {:.1}s",
-                        app.show.gap_remaining_ms().unwrap_or(0) as f32 / 1000.0
-                    ),
-                    palette.warning,
-                );
+                app.set_show_mode(if mode == 0 {
+                    nerd_core::model::PlaybackMode::Manual
+                } else {
+                    nerd_core::model::PlaybackMode::Automatic
+                });
             }
         });
     });
 }
 
-fn empty_show(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
-    ui.add_space(60.0);
-    ui.vertical_centered(|ui| {
-        ui.label(
-            RichText::new("Il palco è pronto")
-                .size(30.0)
-                .strong()
-                .color(palette.text),
-        );
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("Aggiungi i brani alla scaletta per iniziare la serata.")
-                .size(13.0)
-                .color(palette.text_muted),
-        );
-        ui.add_space(16.0);
-        if crate::widgets::accent_button(ui, palette, "Vai alla libreria").clicked() {
-            app.page = Page::Library;
-        }
-        if ui.button("Importa file…").clicked() {
-            app.import_dialog();
-        }
-    });
+fn empty(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
+    nerd_ui_kit::empty_state(
+        ui,
+        &theme,
+        Icon::Live,
+        "Il palco è pronto",
+        "Aggiungi brani alla scaletta per iniziare la serata.",
+        |ui| {
+            if primary_button(ui, &theme, "Apri la libreria").clicked() {
+                app.page = Page::Library;
+            }
+        },
+    );
 }
 
 fn now_card(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+    let theme = app.palette;
     let phase = app.show.phase();
     let live = app.live_song().cloned();
     let next = app.next_song().cloned();
     let elapsed = app.show.elapsed_ms();
     let duration = app.show.live_duration_ms();
-    let progress = app.show.progress_fraction();
     let remaining = app.show.remaining_ms();
+    let progress = app.show.progress_fraction();
     let gap = app.show.gap_remaining_ms();
-
-    let border = if live.is_some() {
-        palette.accent.gamma_multiply(0.55)
-    } else {
-        palette.border
+    let accent = match phase {
+        Phase::Playing => theme.colors.green,
+        Phase::Paused => theme.colors.amber,
+        Phase::Waiting => theme.colors.amber,
+        Phase::Panic | Phase::Stopping => theme.colors.red,
+        _ => theme.colors.accent,
     };
     egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1.0, border))
-        .corner_radius(CornerRadius::same(14))
+        .fill(theme.colors.panel)
+        .stroke(egui::Stroke::new(
+            if live.is_some() { 1.5 } else { 1.0 },
+            if live.is_some() {
+                accent.gamma_multiply(0.55)
+            } else {
+                theme.colors.separator
+            },
+        ))
+        .corner_radius(CornerRadius::same(12))
         .inner_margin(egui::Margin::same(20))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                widgets::section_label(ui, palette, "Ora in onda");
+                section_label(ui, &theme, "In onda");
+                ui.add_space(6.0);
+                status_pill(
+                    ui,
+                    &theme,
+                    output::phase_label(phase),
+                    accent,
+                    if phase == Phase::Paused {
+                        Some(Icon::Pause)
+                    } else {
+                        None
+                    },
+                );
+                if app.show.auto_suspended() {
+                    status_pill(ui, &theme, "Auto sospeso", theme.colors.amber, None);
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if app.show.is_paused() {
-                        widgets::pill(ui, "IN PAUSA", palette.warning);
-                    } else if app.show.background_running() {
-                        widgets::pill(ui, "SOTTOFONDO ATTIVO", palette.title);
-                    }
+                    ui.label(
+                        RichText::new(
+                            if app.show.mode() == nerd_core::model::PlaybackMode::Automatic {
+                                "Automatico"
+                            } else {
+                                "Manuale"
+                            },
+                        )
+                        .font(caption())
+                        .color(theme.colors.text_secondary),
+                    );
                 });
             });
-            ui.add_space(4.0);
-
+            ui.add_space(8.0);
             if let Some(song) = &live {
                 ui.label(
                     RichText::new(song.display_title())
-                        .size(34.0)
+                        .font(nerd_ui_kit::live_title())
                         .strong()
-                        .color(palette.text),
+                        .color(theme.colors.text),
                 );
                 ui.label(
-                    RichText::new(if song.artist.trim().is_empty() {
+                    RichText::new(if song.artist.is_empty() {
                         "Artista non indicato"
                     } else {
                         &song.artist
                     })
-                    .size(15.0)
-                    .color(palette.text_muted),
+                    .size(16.0)
+                    .color(theme.colors.text_secondary),
                 );
                 let credits = [
                     (!song.info.authors.is_empty()).then_some(song.info.authors.as_str()),
@@ -290,277 +256,308 @@ fn now_card(app: &mut NerdApp, ui: &mut Ui) {
                 .collect::<Vec<_>>()
                 .join(" · ");
                 if !credits.is_empty() {
-                    ui.label(RichText::new(credits).size(11.0).color(palette.text_muted));
+                    ui.label(
+                        RichText::new(credits)
+                            .font(caption())
+                            .color(theme.colors.text_secondary),
+                    );
                 }
-                ui.add_space(14.0);
+                ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(
                             RichText::new("Rimanente")
-                                .size(10.0)
-                                .color(palette.text_muted),
+                                .font(caption())
+                                .color(theme.colors.text_secondary),
                         );
                         ui.label(
-                            RichText::new(format_clock(remaining))
-                                .size(52.0)
-                                .strong()
+                            RichText::new(nerd_ui_kit::format_clock(remaining))
+                                .font(nerd_ui_kit::live_countdown())
                                 .color(if remaining < 15_000 {
-                                    palette.warning
+                                    theme.colors.amber
                                 } else {
-                                    palette.text
-                                })
-                                .monospace(),
+                                    theme.colors.text
+                                }),
                         );
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.vertical(|ui| {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if song.has_video() {
+                                    status_pill(
+                                        ui,
+                                        &theme,
+                                        "Video",
+                                        theme.colors.video,
+                                        Some(Icon::Video),
+                                    );
+                                }
+                            });
                             ui.label(
                                 RichText::new(format!(
                                     "{} / {}",
-                                    format_clock(elapsed),
-                                    format_clock(duration)
+                                    nerd_ui_kit::format_clock(elapsed),
+                                    nerd_ui_kit::format_clock(duration)
                                 ))
-                                .size(11.0)
-                                .color(palette.text_muted)
-                                .monospace(),
+                                .font(nerd_ui_kit::timecode(12.0))
+                                .color(theme.colors.text_secondary),
                             );
-                            if song.has_video() {
-                                widgets::pill(ui, "VIDEO", palette.video);
-                            }
                         });
                     });
                 });
-                ui.add(
-                    egui::ProgressBar::new(progress)
-                        .desired_height(10.0)
-                        .fill(if app.show.is_paused() {
-                            palette.warning
-                        } else {
-                            palette.accent
-                        })
-                        .show_percentage(),
+                let (wave, _) =
+                    ui.allocate_exact_size(Vec2::new(ui.available_width(), 54.0), Sense::hover());
+                ui.painter()
+                    .rect_filled(wave, CornerRadius::same(5), theme.colors.well);
+                let peaks = song
+                    .audio
+                    .as_ref()
+                    .and_then(|path| app.library.find_by_path(path))
+                    .map(|asset| asset.waveform.clone())
+                    .unwrap_or_default();
+                nerd_ui_kit::waveform(
+                    ui.painter(),
+                    wave.shrink2(Vec2::new(10.0, 8.0)),
+                    &peaks,
+                    accent,
+                    Some(progress),
                 );
             } else {
                 let title = next
                     .as_ref()
                     .map(|song| song.display_title())
-                    .unwrap_or_else(|| "Nessun brano successivo".to_string());
+                    .unwrap_or_else(|| "Scaletta terminata".to_string());
                 ui.label(
                     RichText::new(match phase {
+                        Phase::Finished => "Serata conclusa",
                         Phase::Waiting => "In attesa del GO",
-                        Phase::Finished => "Scaletta terminata",
                         _ => "Pronto al via",
                     })
-                    .size(12.0)
-                    .color(palette.text_muted),
+                    .font(caption())
+                    .color(theme.colors.text_secondary),
                 );
-                ui.label(RichText::new(title).size(32.0).strong().color(palette.text));
-                if phase == Phase::Waiting {
-                    if app.show.is_counting_down() {
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!(
-                                    "Prossimo brano tra {:.1}",
-                                    gap.unwrap_or(0) as f32 / 1000.0
-                                ))
-                                .size(24.0)
-                                .strong()
-                                .color(palette.warning),
-                            );
-                            ui.label(
-                                RichText::new("secondi")
-                                    .size(11.0)
-                                    .color(palette.text_muted),
-                            );
-                        });
-                    } else {
-                        ui.label(
-                            RichText::new("Premi GO o Spazio per avviare.")
-                                .size(11.0)
-                                .color(palette.text_muted),
-                        );
-                    }
-                } else if phase == Phase::Finished {
+                ui.label(
+                    RichText::new(title)
+                        .font(nerd_ui_kit::live_title())
+                        .color(theme.colors.text),
+                );
+                if let Some(gap) = gap.filter(|_| app.show.is_counting_down()) {
+                    let seconds = gap as f32 / 1000.0;
                     ui.label(
-                        RichText::new("Il sottofondo resta in onda fino a Stop.")
-                            .size(11.0)
-                            .color(palette.text_muted),
+                        RichText::new(format!("{seconds:.1}"))
+                            .font(nerd_ui_kit::live_countdown())
+                            .color(theme.colors.amber),
+                    );
+                    ui.label(
+                        RichText::new("secondi al prossimo brano")
+                            .font(caption())
+                            .color(theme.colors.text_secondary),
                     );
                 }
             }
         });
 }
 
-fn controls_card(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+fn controls(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
     let phase = app.show.phase();
-    let live = app.show.live_index().is_some();
     let can_pause =
         matches!(phase, Phase::Playing | Phase::Paused) || app.show.background_running();
     let can_stop = phase != Phase::Idle;
-    let can_skip = live || phase == Phase::Waiting;
-    let can_back = live || phase == Phase::Waiting;
+    let can_move = app.show.live_index().is_some() || phase == Phase::Waiting;
     let can_panic = phase != Phase::Idle;
-
     egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(14))
+        .fill(theme.colors.panel)
+        .stroke(egui::Stroke::new(1.0, theme.colors.separator))
+        .corner_radius(CornerRadius::same(12))
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                if go_button(ui, palette, live) {
+                if go_button(app, ui, &theme) {
                     app.request_go();
                 }
-                ui.add_space(6.0);
+                ui.add_space(10.0);
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
-                        let pause_label = if app.show.is_paused() || app.show.background_paused() {
-                            crate::strings::RESUME
-                        } else {
-                            crate::strings::PAUSE
-                        };
-                        if ui
-                            .add_enabled(
-                                can_pause,
-                                transport_button(palette, pause_label, palette.warning),
-                            )
-                            .clicked()
-                        {
-                            app.toggle_pause();
-                        }
-                        if ui
-                            .add_enabled(
-                                can_stop,
-                                transport_button(palette, crate::strings::STOP, palette.text),
-                            )
-                            .clicked()
-                        {
-                            app.stop_show();
-                        }
-                        if ui
-                            .add_enabled(
-                                can_skip,
-                                transport_button(palette, crate::strings::SKIP, palette.text),
-                            )
-                            .clicked()
-                        {
-                            app.skip_song();
-                        }
-                        if ui
-                            .add_enabled(
-                                can_back,
-                                transport_button(palette, crate::strings::BACK, palette.text),
-                            )
-                            .clicked()
-                        {
-                            app.previous_song();
-                        }
-                    });
-                    ui.add_space(6.0);
-                    if ui
-                        .add_enabled(
-                            can_panic,
-                            egui::Button::new(
-                                RichText::new(crate::strings::PANIC)
-                                    .size(12.0)
-                                    .strong()
-                                    .color(if can_panic {
-                                        Color32::from_rgb(30, 8, 8)
-                                    } else {
-                                        palette.text_muted
-                                    }),
-                            )
-                            .fill(if can_panic {
-                                palette.danger
+                        transport(
+                            app,
+                            ui,
+                            &theme,
+                            if app.show.is_paused() || app.show.background_paused() {
+                                "Riprendi"
                             } else {
-                                palette.raised
-                            })
-                            .stroke(Stroke::NONE)
-                            .corner_radius(CornerRadius::same(8))
-                            .min_size(Vec2::new(0.0, 28.0)),
-                        )
-                        .on_hover_text("Ferma tutto con un fade rapido (⇧⌘P)")
-                        .clicked()
-                    {
+                                "Pausa"
+                            },
+                            can_pause,
+                            |app| app.toggle_pause(),
+                        );
+                        transport(app, ui, &theme, "Stop", can_stop, |app| app.stop_show());
+                        transport(app, ui, &theme, "Salta", can_move, |app| app.skip_song());
+                        transport(app, ui, &theme, "Indietro", can_move, |app| {
+                            app.previous_song()
+                        });
+                    });
+                    ui.add_space(7.0);
+                    let panic = Button::new(strings::PANIC)
+                        .variant(ButtonVariant::Destructive)
+                        .icon(Icon::Panic)
+                        .size(nerd_ui_kit::ControlSize::Large)
+                        .min_width(150.0)
+                        .keycap("⇧⌘P")
+                        .enabled(can_panic)
+                        .show(ui, &theme);
+                    if panic.clicked() {
                         app.panic();
                     }
+                    ui.add_space(4.0);
+                    keycap(ui, &theme, "Spazio");
                     ui.label(
-                        RichText::new("Spazio: GO · P: pausa · S: stop · N: salta · B: indietro")
-                            .size(9.5)
-                            .color(palette.text_muted),
+                        RichText::new("GO · P pausa · S stop · N salta · B indietro")
+                            .font(caption())
+                            .color(theme.colors.text_secondary),
                     );
                 });
             });
         });
 }
 
-fn go_button(ui: &mut Ui, palette: crate::theme::Palette, live: bool) -> bool {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(210.0, 92.0), Sense::click());
-    let fill = if response.hovered() {
-        palette.accent.gamma_multiply(1.12)
+fn go_button(app: &mut NerdApp, ui: &mut Ui, theme: &Theme) -> bool {
+    let enabled = !app.show.is_empty();
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(190.0, 112.0),
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    let fill = if !enabled {
+        theme.colors.card
+    } else if response.hovered() {
+        theme.colors.green.gamma_multiply(1.12)
     } else {
-        palette.accent
+        theme.colors.green
     };
     ui.painter().rect(
         rect,
-        CornerRadius::same(14),
+        CornerRadius::same(13),
         fill,
-        Stroke::new(2.0, palette.accent.gamma_multiply(1.4)),
+        egui::Stroke::new(
+            if enabled { 2.0 } else { 1.0 },
+            if enabled {
+                theme.colors.green.gamma_multiply(1.4)
+            } else {
+                theme.colors.separator
+            },
+        ),
         egui::StrokeKind::Inside,
     );
+    let go_foreground = if !theme.dark {
+        egui::Color32::WHITE
+    } else {
+        theme.colors.blackout
+    };
     ui.painter().text(
-        Pos2::new(rect.center().x, rect.top() + 18.0),
+        Pos2::new(rect.center().x, rect.top() + 16.0),
         Align2::CENTER_TOP,
-        crate::strings::GO,
-        FontId::proportional(38.0),
-        Color32::from_rgb(9, 23, 21),
+        strings::GO,
+        egui::FontId::proportional(42.0),
+        if enabled {
+            go_foreground
+        } else {
+            theme.colors.text_tertiary
+        },
     );
     ui.painter().text(
-        Pos2::new(rect.center().x, rect.bottom() - 19.0),
+        Pos2::new(rect.center().x, rect.bottom() - 28.0),
         Align2::CENTER_BOTTOM,
-        if live {
+        if app.show.live_index().is_some() {
             "conferma salto"
         } else {
             "avvia il prossimo"
         },
-        FontId::proportional(10.0),
-        Color32::from_rgba_unmultiplied(9, 23, 21, 190),
+        caption(),
+        if enabled {
+            go_foreground.gamma_multiply(0.82)
+        } else {
+            theme.colors.text_tertiary
+        },
+    );
+    ui.painter().text(
+        Pos2::new(rect.center().x, rect.bottom() - 12.0),
+        Align2::CENTER_BOTTOM,
+        "Spazio",
+        nerd_ui_kit::micro(),
+        if enabled {
+            theme.colors.blackout.gamma_multiply(0.55)
+        } else {
+            theme.colors.text_tertiary
+        },
     );
     response.clicked()
 }
 
-fn transport_button(
-    palette: crate::theme::Palette,
-    text: &str,
-    color: Color32,
-) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(text).size(12.0).color(color))
-        .fill(palette.raised)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(8))
-        .min_size(Vec2::new(68.0, 36.0))
+fn transport(
+    app: &mut NerdApp,
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    enabled: bool,
+    action: impl FnOnce(&mut NerdApp),
+) {
+    let icon_kind = match label {
+        "Pausa" | "Riprendi" => Icon::Pause,
+        "Stop" => Icon::Stop,
+        "Salta" => Icon::SkipForward,
+        "Indietro" => Icon::SkipBack,
+        _ => Icon::Play,
+    };
+    if Button::new(label)
+        .variant(ButtonVariant::Secondary)
+        .icon(icon_kind)
+        .size(nerd_ui_kit::ControlSize::Large)
+        .min_width(102.0)
+        .enabled(enabled)
+        .show(ui, theme)
+        .clicked()
+    {
+        action(app);
+    }
 }
 
 fn next_card(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+    let theme = app.palette;
     let next = app.next_song().cloned();
     let phase = app.show.phase();
     egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(14))
+        .fill(theme.colors.panel)
+        .stroke(egui::Stroke::new(1.0, theme.colors.separator))
+        .corner_radius(CornerRadius::same(12))
         .inner_margin(egui::Margin::same(18))
         .show(ui, |ui| {
-            widgets::section_label(ui, palette, crate::strings::NEXT);
-            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                section_label(ui, &theme, "Prossimo");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if app.show.is_counting_down() {
+                        if let Some(gap) = app.show.gap_remaining_ms() {
+                            status_pill(
+                                ui,
+                                &theme,
+                                &format!("{:.1}s", gap as f32 / 1000.0),
+                                theme.colors.amber,
+                                Some(Icon::Clock),
+                            );
+                        }
+                    }
+                });
+            });
+            ui.add_space(5.0);
             if let Some(song) = next {
                 ui.label(
                     RichText::new(song.display_title())
                         .size(22.0)
                         .strong()
-                        .color(palette.text),
+                        .color(theme.colors.text),
                 );
                 ui.label(
                     RichText::new(if song.artist.is_empty() {
@@ -568,169 +565,127 @@ fn next_card(app: &mut NerdApp, ui: &mut Ui) {
                     } else {
                         &song.artist
                     })
-                    .size(11.5)
-                    .color(palette.text_muted),
+                    .font(body())
+                    .color(theme.colors.text_secondary),
                 );
-                ui.add_space(8.0);
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    widgets::pill(
+                    status_pill(
                         ui,
-                        crate::strings::format_timecode(song.effective_duration_ms()),
-                        palette.text_muted,
+                        &theme,
+                        &strings::format_timecode(song.effective_duration_ms()),
+                        theme.colors.text_secondary,
+                        Some(Icon::Clock),
                     );
                     if song.has_video() {
-                        widgets::pill(ui, "VIDEO", palette.video);
+                        status_pill(ui, &theme, "Video", theme.colors.video, Some(Icon::Video));
                     }
-                    widgets::pill(ui, widgets::status_label(song.status), palette.title);
                 });
                 if !song.notes.trim().is_empty() {
-                    ui.add_space(8.0);
+                    ui.add_space(5.0);
                     ui.label(
                         RichText::new(&song.notes)
-                            .size(10.5)
-                            .color(palette.text_muted),
+                            .font(caption())
+                            .color(theme.colors.text_secondary),
                     );
                 }
-            } else if phase == Phase::Finished {
-                ui.label(
-                    RichText::new("Nessun altro brano")
-                        .size(18.0)
-                        .color(palette.text_muted),
-                );
-                ui.label(
-                    RichText::new("Il sottofondo accompagna l'uscita del pubblico.")
-                        .size(10.5)
-                        .color(palette.text_muted),
-                );
             } else {
                 ui.label(
                     RichText::new("Fine della scaletta")
                         .size(18.0)
-                        .color(palette.text_muted),
+                        .color(theme.colors.text_secondary),
+                );
+                ui.label(
+                    RichText::new(if phase == Phase::Finished {
+                        "Il sottofondo accompagna l'uscita."
+                    } else {
+                        "Nessun brano in attesa."
+                    })
+                    .font(caption())
+                    .color(theme.colors.text_secondary),
                 );
             }
-            ui.add_space(12.0);
-            widgets::divider(ui, palette);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("Sottofondo")
-                        .size(10.5)
-                        .color(palette.text_muted),
-                );
-                widgets::pill(
-                    ui,
-                    if app.show.background_paused() {
-                        "In pausa"
-                    } else if app.show.background_running() {
-                        "In onda"
-                    } else {
-                        "Fermo"
-                    },
-                    if app.show.background_running() {
-                        palette.title
-                    } else {
-                        palette.text_muted
-                    },
-                );
-            });
         });
 }
 
-fn checklist_card(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
-    let completed = app.checklist.complete();
+fn output_card(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
+    let state = app.projector_state(ui.ctx());
     egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(
-            1.0,
-            if completed {
-                palette.success.gamma_multiply(0.5)
-            } else {
-                palette.border
-            },
-        ))
-        .corner_radius(CornerRadius::same(14))
-        .inner_margin(egui::Margin::same(18))
+        .fill(theme.colors.panel)
+        .stroke(egui::Stroke::new(1.0, theme.colors.separator))
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                widgets::section_label(ui, palette, "Checklist pre-show");
+                section_label(ui, &theme, "Uscita video");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if completed {
-                        widgets::pill(ui, crate::strings::READY.to_uppercase(), palette.success);
+                    status_pill(
+                        ui,
+                        &theme,
+                        if app.output_open { "Aperta" } else { "Chiusa" },
+                        if app.output_open {
+                            theme.colors.green
+                        } else {
+                            theme.colors.text_secondary
+                        },
+                        None,
+                    );
+                });
+            });
+            let preview_width = ui.available_width();
+            let (rect, _) = ui.allocate_exact_size(
+                Vec2::new(
+                    preview_width,
+                    (preview_width * 9.0 / 16.0).clamp(120.0, 210.0),
+                ),
+                Sense::hover(),
+            );
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same(6), theme.colors.blackout);
+            output::paint_output(ui.painter(), rect, &state);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(app.display_name())
+                        .font(caption())
+                        .color(theme.colors.text_secondary),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if Button::new(if app.project.output.blackout {
+                        "Fine blackout"
                     } else {
-                        let done = [
-                            app.checklist.audio_output,
-                            app.checklist.projector,
-                            app.checklist.volumes,
-                        ]
-                        .iter()
-                        .filter(|value| **value)
-                        .count();
-                        widgets::pill(ui, format!("{done}/3"), palette.warning);
+                        "Blackout"
+                    })
+                    .variant(if app.project.output.blackout {
+                        ButtonVariant::Destructive
+                    } else {
+                        ButtonVariant::Plain
+                    })
+                    .icon(Icon::Blackout)
+                    .show(ui, &theme)
+                    .clicked()
+                    {
+                        app.toggle_blackout();
+                    }
+                    if icon_button(
+                        ui,
+                        &theme,
+                        Icon::Monitor,
+                        Some("Apri o chiudi uscita"),
+                        app.output_open,
+                    )
+                    .clicked()
+                    {
+                        app.toggle_output(ui.ctx());
                     }
                 });
             });
-            ui.add_space(4.0);
-            ui.checkbox(
-                &mut app.checklist.audio_output,
-                "Uscita audio collegata e testata",
-            );
-            ui.checkbox(
-                &mut app.checklist.projector,
-                "Proiettore acceso sulla scena",
-            );
-            ui.checkbox(&mut app.checklist.volumes, "Volumi e sottofondo verificati");
-            if ui
-                .add(
-                    egui::Button::new(
-                        RichText::new("Azzera checklist")
-                            .size(9.5)
-                            .color(palette.text_muted),
-                    )
-                    .frame(false),
-                )
-                .clicked()
-            {
-                app.checklist = crate::state::Checklist::default();
-            }
         });
-}
-
-fn lower_cards(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
-    let width = ui.available_width();
-    if width > 1_000.0 {
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                Vec2::new(width * 0.32, 0.0),
-                Layout::top_down(Align::Min),
-                |ui| background_card(app, ui),
-            );
-            ui.add_space(12.0);
-            ui.allocate_ui_with_layout(
-                Vec2::new(width * 0.30, 0.0),
-                Layout::top_down(Align::Min),
-                |ui| meters_card(app, ui),
-            );
-            ui.add_space(12.0);
-            ui.allocate_ui_with_layout(
-                Vec2::new(width * 0.33, 0.0),
-                Layout::top_down(Align::Min),
-                |ui| output_card(app, ui),
-            );
-        });
-    } else {
-        background_card(app, ui);
-        ui.add_space(12.0);
-        meters_card(app, ui);
-        ui.add_space(12.0);
-        output_card(app, ui);
-    }
-    let _ = palette;
 }
 
 fn background_card(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+    let theme = app.palette;
     let running = app.show.background_running();
     let paused = app.show.background_paused();
     let phase = app.show.phase();
@@ -738,22 +693,14 @@ fn background_card(app: &mut NerdApp, ui: &mut Ui) {
         phase,
         Phase::Playing | Phase::Paused | Phase::Stopping | Phase::Panic
     );
-    let pos = app.levels.background_pos_ms;
-    let duration = app.levels.background_duration_ms;
-    let progress = if duration > 0 {
-        (pos as f32 / duration as f32).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let mut volume = app.project.background.volume;
-
+    let volume = app.project.background.volume;
     egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(14))
+        .fill(theme.colors.panel)
+        .stroke(egui::Stroke::new(1.0, theme.colors.separator))
+        .corner_radius(CornerRadius::same(12))
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
-            widgets::section_label(ui, palette, crate::strings::BACKGROUND);
+            section_label(ui, &theme, "Sottofondo");
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(if paused {
@@ -766,325 +713,290 @@ fn background_card(app: &mut NerdApp, ui: &mut Ui) {
                     .size(15.0)
                     .strong()
                     .color(if running {
-                        palette.title
+                        theme.colors.mint
                     } else {
-                        palette.text_muted
+                        theme.colors.text_secondary
                     }),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(
                         RichText::new(format!("{} brani", app.project.background.tracks.len()))
-                            .size(10.0)
-                            .color(palette.text_muted),
+                            .font(caption())
+                            .color(theme.colors.text_secondary),
                     );
                 });
             });
-            if let Some(error) = &app.background_error {
-                ui.label(RichText::new(error).size(10.0).color(palette.danger));
-            }
-            if duration > 0 {
-                let (rect, _) =
-                    ui.allocate_exact_size(Vec2::new(ui.available_width(), 5.0), Sense::hover());
-                ui.painter()
-                    .rect_filled(rect, CornerRadius::same(3), palette.background);
-                ui.painter().rect_filled(
-                    Rect::from_min_size(
-                        rect.min,
-                        Vec2::new(rect.width() * progress, rect.height()),
-                    ),
-                    CornerRadius::same(3),
-                    palette.title,
-                );
-                ui.label(
-                    RichText::new(format!(
-                        "{} / {}",
-                        format_clock(pos),
-                        format_clock(duration)
-                    ))
-                    .size(9.5)
-                    .color(palette.text_muted)
-                    .monospace(),
-                );
-            } else if app.project.background.tracks.is_empty() {
-                ui.label(
-                    RichText::new("Nessuna playlist configurata.")
-                        .size(10.5)
-                        .color(palette.text_muted),
-                );
-                if ui.button("Configura in Impostazioni").clicked() {
+            if app.project.background.tracks.is_empty() {
+                ui.add_space(4.0);
+                if Button::new("Configura in Impostazioni")
+                    .variant(ButtonVariant::Plain)
+                    .show(ui, &theme)
+                    .clicked()
+                {
                     app.page = Page::Settings;
                 }
             }
-            ui.add_space(6.0);
+            let mut volume = volume;
             ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(
-                        can_start && !running,
-                        egui::Button::new("Avvia")
-                            .fill(palette.title.gamma_multiply(0.2))
-                            .stroke(Stroke::new(1.0, palette.title.gamma_multiply(0.5)))
-                            .corner_radius(CornerRadius::same(7)),
-                    )
-                    .clicked()
-                {
-                    app.start_background_manual();
-                }
-                if ui
-                    .add_enabled(
-                        running,
-                        egui::Button::new("Ferma")
-                            .fill(palette.raised)
-                            .stroke(Stroke::new(1.0, palette.border))
-                            .corner_radius(CornerRadius::same(7)),
-                    )
-                    .clicked()
-                {
-                    app.stop_background_manual();
-                }
-                if running
-                    && ui
-                        .button(if paused { "Riprendi" } else { "Pausa" })
-                        .clicked()
-                {
-                    app.toggle_pause();
-                }
-            });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Volume").size(10.0).color(palette.text_muted));
-                if ui
-                    .add(
-                        egui::Slider::new(&mut volume, 0.0..=1.5)
-                            .show_value(false)
-                            .clamping(egui::SliderClamping::Always),
-                    )
-                    .changed()
-                {
+                ui.label(
+                    RichText::new("Volume")
+                        .font(caption())
+                        .color(theme.colors.text_secondary),
+                );
+                if slider(ui, &theme, &mut volume, 0.0..=1.5, "", 150.0).changed() {
                     app.project.background.volume = volume;
                     let _ = app.engine.set_background_volume(volume);
                     app.mark_dirty();
                 }
                 ui.label(
-                    RichText::new(crate::strings::format_volume(volume))
-                        .size(9.5)
-                        .color(palette.text),
+                    RichText::new(strings::format_volume(volume))
+                        .font(caption())
+                        .color(theme.colors.text),
                 );
+            });
+            ui.horizontal(|ui| {
+                if Button::new("Avvia")
+                    .variant(ButtonVariant::Tinted)
+                    .icon(Icon::Play)
+                    .enabled(can_start && !running)
+                    .show(ui, &theme)
+                    .clicked()
+                {
+                    app.start_background_manual();
+                }
+                if Button::new("Ferma")
+                    .variant(ButtonVariant::Plain)
+                    .icon(Icon::Stop)
+                    .enabled(running)
+                    .show(ui, &theme)
+                    .clicked()
+                {
+                    app.stop_background_manual();
+                }
+                if Button::new(if paused { "Riprendi" } else { "Pausa" })
+                    .variant(ButtonVariant::Plain)
+                    .enabled(running)
+                    .show(ui, &theme)
+                    .clicked()
+                {
+                    app.toggle_pause();
+                }
             });
         });
 }
 
-fn meters_card(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+fn meters(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
     let mut master = app.prefs.master_volume;
-    let mut song_volume = app.live_song().map(|song| song.volume).unwrap_or_default();
-    let has_song = app.live_song().is_some();
-
     egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(14))
+        .fill(theme.colors.panel)
+        .stroke(egui::Stroke::new(1.0, theme.colors.separator))
+        .corner_radius(CornerRadius::same(12))
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
-            widgets::section_label(ui, palette, "Mix");
+            section_label(ui, &theme, "Mix");
+            ui.add_space(3.0);
+            nerd_ui_kit::vu_meter(
+                ui,
+                &theme,
+                "Brano",
+                app.song_meter,
+                app.song_meter,
+                (app.song_meter + 0.08).min(1.0),
+                (app.song_meter + 0.08).min(1.0),
+            );
+            ui.add_space(2.0);
+            nerd_ui_kit::vu_meter(
+                ui,
+                &theme,
+                "Sottofondo",
+                app.bg_meter,
+                app.bg_meter,
+                (app.bg_meter + 0.06).min(1.0),
+                (app.bg_meter + 0.06).min(1.0),
+            );
+            ui.add_space(5.0);
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("Brano")
-                        .size(10.5)
-                        .color(palette.accent)
-                        .strong(),
+                    RichText::new("Master")
+                        .font(caption())
+                        .color(theme.colors.text_secondary),
                 );
-                widgets::vu_meter(
-                    ui,
-                    palette,
-                    app.song_meter,
-                    &format!("{:.0}%", app.song_meter * 100.0),
-                    palette.accent,
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("Sottofondo")
-                        .size(10.5)
-                        .color(palette.title)
-                        .strong(),
-                );
-                widgets::vu_meter(
-                    ui,
-                    palette,
-                    app.bg_meter,
-                    &format!("{:.0}%", app.bg_meter * 100.0),
-                    palette.title,
-                );
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Master").size(10.0).color(palette.text_muted));
-                if ui
-                    .add(egui::Slider::new(&mut master, 0.0..=1.0).show_value(false))
-                    .changed()
-                {
+                if slider(ui, &theme, &mut master, 0.0..=1.0, "", 180.0).changed() {
                     app.prefs.master_volume = master;
                     app.prefs_dirty = true;
                     let _ = app.engine.set_master_volume(master);
                 }
                 ui.label(
-                    RichText::new(crate::strings::format_volume(master))
-                        .size(9.5)
-                        .color(palette.text),
+                    RichText::new(strings::format_volume(master))
+                        .font(caption())
+                        .color(theme.colors.text),
                 );
             });
-            if has_song {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Brano").size(10.0).color(palette.text_muted));
-                    if ui
-                        .add(
-                            egui::Slider::new(&mut song_volume, 0.0..=1.5)
-                                .show_value(false)
-                                .clamping(egui::SliderClamping::Always),
-                        )
-                        .changed()
-                    {
-                        if let Some(index) = app.show.live_index() {
-                            if let Some(song) = app.project.songs.get_mut(index) {
-                                song.volume = song_volume;
-                            }
-                            let _ = app.engine.set_song_volume(song_volume);
-                            app.mark_dirty();
-                        }
-                    }
-                    ui.label(
-                        RichText::new(crate::strings::format_volume(song_volume))
-                            .size(9.5)
-                            .color(palette.text),
-                    );
-                });
-            }
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(format!(
-                    "Uscita: {}",
-                    app.engine
-                        .status()
-                        .device_name
-                        .unwrap_or_else(|| "predefinita".to_string())
-                ))
-                .size(9.0)
-                .color(palette.text_muted),
-            );
         });
 }
 
-fn output_card(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
-    let state = app.projector_state(ui.ctx());
+fn checklist(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
+    let complete = app.checklist.complete();
     egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(14))
+        .fill(theme.colors.panel)
+        .stroke(egui::Stroke::new(
+            1.0,
+            if complete {
+                theme.colors.green.gamma_multiply(0.5)
+            } else {
+                theme.colors.separator
+            },
+        ))
+        .corner_radius(CornerRadius::same(12))
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                widgets::section_label(ui, palette, crate::strings::OUTPUT);
+                section_label(ui, &theme, "Checklist pre-show");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    widgets::pill(
+                    status_pill(
                         ui,
-                        if app.output_open { "APERTA" } else { "CHIUSA" },
-                        if app.output_open {
-                            palette.accent
+                        &theme,
+                        if complete { "Pronto" } else { "Da verificare" },
+                        if complete {
+                            theme.colors.green
                         } else {
-                            palette.text_muted
+                            theme.colors.amber
                         },
+                        Some(if complete { Icon::Check } else { Icon::Warning }),
                     );
                 });
             });
-            let width = ui.available_width().min(320.0);
-            let preview_h = width * 9.0 / 16.0;
-            let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), preview_h), Sense::hover());
-            ui.painter().rect(
-                rect,
-                CornerRadius::same(7),
-                Color32::BLACK,
-                Stroke::new(1.0, palette.border),
-                egui::StrokeKind::Inside,
-            );
-            let painter = ui.painter().with_clip_rect(rect);
-            output::paint_output(&painter, rect, &state);
-            ui.label(
-                RichText::new(format!(
-                    "{} · {}",
-                    app.display_name(),
-                    if app.project.output.blackout {
-                        crate::strings::BLACKOUT
-                    } else {
-                        crate::strings::ON_AIR
-                    }
-                ))
-                .size(9.5)
-                .color(palette.text_muted),
-            );
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if widgets::ghost_button(
-                    ui,
-                    palette,
-                    if app.output_open {
-                        "Chiudi"
-                    } else {
-                        "Apri uscita"
-                    },
-                )
-                .clicked()
-                {
-                    app.toggle_output(ui.ctx());
-                }
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(if app.project.output.blackout {
-                                "Fine blackout"
-                            } else {
-                                "Blackout"
-                            })
-                            .size(10.0)
-                            .color(if app.project.output.blackout {
-                                Color32::WHITE
-                            } else {
-                                palette.danger
-                            }),
-                        )
-                        .fill(if app.project.output.blackout {
-                            palette.danger
-                        } else {
-                            palette.raised
-                        })
-                        .stroke(Stroke::new(1.0, palette.border))
-                        .corner_radius(CornerRadius::same(7)),
-                    )
+            let mut audio = app.checklist.audio_output;
+            let mut projector = app.checklist.projector;
+            let mut volumes = app.checklist.volumes;
+            if toggle(ui, &theme, &mut audio, "Uscita audio collegata e testata").changed() {
+                app.checklist.audio_output = audio;
+            }
+            if toggle(ui, &theme, &mut projector, "Proiettore acceso sulla scena").changed() {
+                app.checklist.projector = projector;
+            }
+            if toggle(ui, &theme, &mut volumes, "Volumi e sottofondo verificati").changed() {
+                app.checklist.volumes = volumes;
+            }
+            if !complete && primary_button(ui, &theme, "Segna tutto pronto").clicked() {
+                app.checklist.audio_output = true;
+                app.checklist.projector = true;
+                app.checklist.volumes = true;
+            }
+            if complete
+                && Button::new("Azzera checklist")
+                    .variant(ButtonVariant::Plain)
+                    .show(ui, &theme)
                     .clicked()
-                {
-                    app.toggle_blackout();
-                }
-            });
+            {
+                app.checklist = crate::state::Checklist::default();
+            }
         });
 }
 
-fn shortcuts_strip(ui: &mut Ui, app: &mut NerdApp) {
-    let palette = app.palette;
-    ui.horizontal_wrapped(|ui| {
-        widgets::shortcut_chip(ui, palette, "Spazio", "GO");
-        widgets::shortcut_chip(ui, palette, "P", "Pausa");
-        widgets::shortcut_chip(ui, palette, "S", "Stop");
-        widgets::shortcut_chip(ui, palette, "N", "Salta");
-        widgets::shortcut_chip(ui, palette, "B", "Indietro");
-        widgets::shortcut_chip(ui, palette, "⇧⌘P", "Panic");
-        if ui.button("Tutte le scorciatoie").clicked() {
-            app.show_shortcuts = true;
-        }
-    });
+fn queue(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
+    egui::Frame::new()
+        .fill(theme.colors.panel)
+        .stroke(egui::Stroke::new(1.0, theme.colors.separator))
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(egui::Margin::same(16))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                section_label(ui, &theme, "Scaletta");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if Button::new("Apri scaletta")
+                        .variant(ButtonVariant::Plain)
+                        .icon(Icon::Timeline)
+                        .show(ui, &theme)
+                        .clicked()
+                    {
+                        app.page = Page::Timeline;
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            let live_index = app.show.live_index();
+            let songs: Vec<_> = app.project.songs.iter().cloned().enumerate().collect();
+            for (index, song) in songs.into_iter().take(8) {
+                let current = live_index == Some(index);
+                let next = app.show.cursor_index() == Some(index);
+                let width = ui.available_width();
+                let (rect, response) =
+                    ui.allocate_exact_size(Vec2::new(width, 32.0), Sense::click());
+                if current || next || response.hovered() {
+                    ui.painter().rect_filled(
+                        rect,
+                        CornerRadius::same(5),
+                        if current {
+                            theme.colors.green.gamma_multiply(0.14)
+                        } else if next {
+                            theme.colors.accent_soft
+                        } else {
+                            theme.colors.hover
+                        },
+                    );
+                }
+                ui.painter().text(
+                    Pos2::new(rect.left() + 8.0, rect.center().y),
+                    Align2::LEFT_CENTER,
+                    format!("{:02}", index + 1),
+                    nerd_ui_kit::timecode(10.0),
+                    theme.colors.text_tertiary,
+                );
+                ui.painter().text(
+                    Pos2::new(rect.left() + 34.0, rect.center().y),
+                    Align2::LEFT_CENTER,
+                    song.display_title(),
+                    body(),
+                    if current || next {
+                        theme.colors.text
+                    } else {
+                        theme.colors.text_secondary
+                    },
+                );
+                ui.painter().text(
+                    Pos2::new(rect.right() - 8.0, rect.center().y),
+                    Align2::RIGHT_CENTER,
+                    strings::format_timecode(song.effective_duration_ms()),
+                    nerd_ui_kit::timecode(10.0),
+                    theme.colors.text_tertiary,
+                );
+                if current {
+                    ui.painter().rect_filled(
+                        Rect::from_min_size(rect.min, Vec2::new(2.0, rect.height())),
+                        CornerRadius::same(1),
+                        theme.colors.green,
+                    );
+                }
+                if response.clicked() {
+                    app.selected_song = Some(song.id.clone());
+                    app.page = Page::Timeline;
+                }
+            }
+        });
 }
 
-fn format_clock(ms: u64) -> String {
-    let total = ms / 1000;
-    format!("{:02}:{:02}", total / 60, total % 60)
+fn shortcuts(ui: &mut Ui, theme: &Theme) {
+    ui.horizontal_wrapped(|ui| {
+        for (key, label) in [
+            ("Spazio", "GO"),
+            ("P", "Pausa"),
+            ("S", "Stop"),
+            ("N", "Salta"),
+            ("B", "Indietro"),
+            ("⇧⌘P", "Panic"),
+            ("⌘B", "Blackout"),
+        ] {
+            keycap(ui, theme, key);
+            ui.label(
+                RichText::new(label)
+                    .font(caption())
+                    .color(theme.colors.text_secondary),
+            );
+            ui.add_space(4.0);
+        }
+    });
 }

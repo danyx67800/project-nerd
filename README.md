@@ -98,6 +98,13 @@ Le serate sono file `.nerdshow` salvati dove decide l'utente. L'app funziona off
 | Impostazioni | ⌘, |
 | Pagine | ⌘1 … ⌘5 |
 
+## Design system
+
+Il linguaggio visivo e i componenti sono documentati in [docs/DESIGN.md](docs/DESIGN.md).
+Le pagine usano esclusivamente il crate `nerd-ui-kit`; la galleria completa si apre con
+`cargo run -p nerd-app -- --gallery`. Gli screenshot di riferimento sono in
+`docs/screenshots/`.
+
 ## Aggiornamenti
 
 Il repository pubblico è già impostato su `danyx67800/project-nerd`; puoi cambiarlo in Impostazioni → Aggiornamenti e scegliere Stabile o Alpha. Le release devono includere zip, `.sha256` e firma Ed25519. Le release sono pubblicate su <https://github.com/danyx67800/project-nerd/releases>. Le chiavi si generano con:

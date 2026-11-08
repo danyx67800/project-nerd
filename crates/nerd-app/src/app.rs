@@ -29,6 +29,7 @@ use crate::state::{Checklist, Page, Snackbar, Toast, ToastKind, UndoStack};
 use crate::theme::Palette;
 use crate::update::{UpdateStatus, Updater};
 use crate::video_player::VideoPlayer;
+use nerd_ui_kit::SystemAppearance;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LibrarySort {
@@ -50,6 +51,45 @@ struct BackgroundLoad {
     result: Result<DecodedAudio, String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct LaunchOptions {
+    pub initial: Option<PathBuf>,
+    pub demo: bool,
+    pub gallery: bool,
+    pub page: Option<Page>,
+    pub appearance: Option<nerd_core::prefs::ThemeMode>,
+    pub screenshot: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChromeState {
+    pub library_sidebar: bool,
+    pub library_filter: usize,
+    pub inspector_open: bool,
+    pub help: bool,
+    pub timeline_list: bool,
+    pub timeline_zoom: f32,
+    pub timeline_snap: bool,
+    pub titles_sidebar: bool,
+    pub live_checklist: bool,
+}
+
+impl Default for ChromeState {
+    fn default() -> Self {
+        Self {
+            library_sidebar: true,
+            library_filter: 0,
+            inspector_open: true,
+            help: false,
+            timeline_list: false,
+            timeline_zoom: 1.0,
+            timeline_snap: true,
+            titles_sidebar: true,
+            live_checklist: true,
+        }
+    }
+}
+
 pub struct NerdApp {
     pub(crate) paths: AppPaths,
     pub(crate) prefs: Preferences,
@@ -60,6 +100,8 @@ pub struct NerdApp {
     pub(crate) show: Show,
     pub(crate) page: Page,
     pub(crate) palette: Palette,
+    pub(crate) system: SystemAppearance,
+    pub(crate) chrome: ChromeState,
     pub(crate) menu: MenuBar,
     pub(crate) snackbar: Option<Snackbar>,
     pub(crate) undo: UndoStack,
@@ -114,25 +156,38 @@ pub struct NerdApp {
     pub(crate) order_drag: Option<OrderDrag>,
     pub(crate) preview_anchor: Instant,
     pub(crate) started: Instant,
+    screenshot: Option<PathBuf>,
+    screenshot_at: Instant,
+    screenshot_requested: bool,
     output_close_signal: Arc<AtomicBool>,
 }
 
 impl NerdApp {
-    pub fn new(
-        cc: &eframe::CreationContext<'_>,
-        paths: AppPaths,
-        initial: Option<PathBuf>,
-    ) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, paths: AppPaths, options: LaunchOptions) -> Self {
         crate::update::cleanup_stale(&paths);
-        let prefs = persistence::load_preferences(&paths.prefs_file).unwrap_or_default();
-        let palette = crate::theme::install(&cc.egui_ctx, prefs.theme);
+        let mut prefs = persistence::load_preferences(&paths.prefs_file).unwrap_or_default();
+        if let Some(appearance) = options.appearance {
+            prefs.theme = appearance;
+        }
+        let initial = options.initial.clone();
+        let system = nerd_ui_kit::system::detect_with_egui(&cc.egui_ctx);
+        let palette = crate::theme::install_with_system(&cc.egui_ctx, prefs.theme, system);
         let library = persistence::load_library(&paths.library_file).unwrap_or_default();
-        let recovery = persistence::load_recovery(&paths.support);
+        // The demo is a clean-room fixture: never restore or overwrite user data.
+        let recovery = if options.demo {
+            None
+        } else {
+            persistence::load_recovery(&paths.support)
+        };
 
         let mut startup_note = None;
         let mut project = Project::new("Nuova serata");
         let mut project_path = None;
-        let candidate = initial.or_else(|| prefs.recent_projects.first().cloned());
+        let candidate = if options.demo {
+            None
+        } else {
+            initial.or_else(|| prefs.recent_projects.first().cloned())
+        };
         if let Some(candidate) = candidate {
             match persistence::load_project(&candidate) {
                 Ok(mut loaded) => {
@@ -148,7 +203,7 @@ impl NerdApp {
                     ));
                 }
             }
-        } else if paths.autosave_file.is_file() {
+        } else if !options.demo && paths.autosave_file.is_file() {
             if let Ok(mut loaded) = persistence::load_project(&paths.autosave_file) {
                 persistence::normalize_loaded_project(&mut loaded);
                 loaded.reset_statuses();
@@ -178,7 +233,11 @@ impl NerdApp {
         } else {
             None
         };
-        let page = if project.songs.is_empty() {
+        let page = if options.gallery {
+            Page::Gallery
+        } else if let Some(page) = options.page {
+            page
+        } else if project.songs.is_empty() {
             Page::Library
         } else {
             Page::Live
@@ -193,6 +252,8 @@ impl NerdApp {
             show,
             page,
             palette,
+            system,
+            chrome: ChromeState::default(),
             menu: MenuBar::install(),
             snackbar: startup_note.map(|toast| Snackbar { toast }),
             undo: UndoStack::default(),
@@ -247,6 +308,9 @@ impl NerdApp {
             order_drag: None,
             preview_anchor: now,
             started: now,
+            screenshot: options.screenshot,
+            screenshot_at: now + Duration::from_millis(2_200),
+            screenshot_requested: false,
             output_close_signal: Arc::new(AtomicBool::new(false)),
         };
         if let Some(path) = app.project_path.clone() {
@@ -266,6 +330,12 @@ impl NerdApp {
                 ToastKind::Warning,
             ));
             app.snackbar = startup_note.map(|toast| Snackbar { toast });
+        }
+        if options.demo {
+            crate::demo::populate(&mut app);
+        }
+        if options.gallery {
+            app.page = Page::Gallery;
         }
         app.ensure_background_loaded();
         app.ensure_preparations();
@@ -693,7 +763,7 @@ impl NerdApp {
         }
     }
 
-    fn close_output_viewport(&mut self) {
+    pub(crate) fn close_output_viewport(&mut self) {
         self.output_open = false;
     }
 
@@ -1606,6 +1676,36 @@ impl NerdApp {
             self.ensure_background_loaded();
         }
 
+        if let Some(path) = self.screenshot.clone() {
+            if !self.screenshot_requested && now >= self.screenshot_at {
+                self.screenshot_requested = true;
+                let callback_ctx = ctx.clone();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(
+                    egui::ScreenshotCallback::new(move |image| {
+                        let width = image.width() as u32;
+                        let height = image.height() as u32;
+                        let mut bytes = Vec::with_capacity(image.pixels.len() * 4);
+                        for pixel in &image.pixels {
+                            bytes.extend_from_slice(&pixel.to_array());
+                        }
+                        if let Some(parent) = path.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if let Err(error) = image::save_buffer(
+                            &path,
+                            &bytes,
+                            width,
+                            height,
+                            image::ColorType::Rgba8,
+                        ) {
+                            eprintln!("screenshot: {error}");
+                        }
+                        callback_ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }),
+                ));
+            }
+        }
+
         if self.output_close_signal.swap(false, Ordering::SeqCst) && self.output_open {
             ctx.send_viewport_cmd_to(output_viewport_id(), egui::ViewportCommand::Close);
             self.output_open = false;
@@ -1647,6 +1747,12 @@ impl NerdApp {
         if now.duration_since(self.last_display_poll) > Duration::from_secs(2) {
             self.last_display_poll = now;
             self.refresh_displays();
+            let system = nerd_ui_kit::system::detect_with_egui(ctx);
+            if system != self.system {
+                self.system = system;
+                self.palette =
+                    crate::theme::install_with_system(ctx, self.prefs.theme, self.system);
+            }
         }
 
         if let Some(at) = self.startup_update_at {
@@ -1727,14 +1833,15 @@ impl NerdApp {
     // UI
     // ---------------------------------------------------------------------
 
+    #[allow(dead_code)]
     fn header_ui(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
         egui::Panel::top("workspace-header")
             .frame(
                 egui::Frame::new()
-                    .fill(palette.panel)
+                    .fill(palette.colors.panel)
                     .inner_margin(egui::Margin::symmetric(18, 10))
-                    .stroke(Stroke::new(1.0, palette.border)),
+                    .stroke(Stroke::new(1.0, palette.colors.separator)),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1743,14 +1850,14 @@ impl NerdApp {
                     ui.painter().rect_filled(
                         logo_rect,
                         egui::CornerRadius::same(9),
-                        palette.accent_soft,
+                        palette.colors.accent_soft,
                     );
                     ui.painter().text(
                         logo_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "N",
                         egui::FontId::proportional(18.0),
-                        palette.accent,
+                        palette.colors.accent,
                     );
                     ui.add_space(4.0);
                     ui.vertical(|ui| {
@@ -1759,18 +1866,18 @@ impl NerdApp {
                                 RichText::new(nerd_core::APP_NAME)
                                     .size(14.0)
                                     .strong()
-                                    .color(palette.text),
+                                    .color(palette.colors.text),
                             );
                             crate::widgets::pill(
                                 ui,
                                 format!("v{}", nerd_core::APP_VERSION),
-                                palette.accent,
+                                palette.colors.accent,
                             );
                         });
                         ui.label(
                             RichText::new(&self.project.name)
                                 .size(11.5)
-                                .color(palette.text_muted),
+                                .color(palette.colors.text_secondary),
                         );
                     });
                     ui.add_space(18.0);
@@ -1779,12 +1886,12 @@ impl NerdApp {
 
                     let phase = self.show.phase();
                     let phase_color = match phase {
-                        Phase::Playing => palette.accent,
-                        Phase::Paused => palette.warning,
-                        Phase::Waiting => palette.title,
-                        Phase::Panic | Phase::Stopping => palette.danger,
-                        Phase::Finished => palette.success,
-                        Phase::Idle => palette.text_muted,
+                        Phase::Playing => palette.colors.accent,
+                        Phase::Paused => palette.colors.amber,
+                        Phase::Waiting => palette.colors.title,
+                        Phase::Panic | Phase::Stopping => palette.colors.red,
+                        Phase::Finished => palette.colors.green,
+                        Phase::Idle => palette.colors.text_secondary,
                     };
                     crate::widgets::pill(ui, output::phase_label(phase), phase_color);
                     if let Some(song) = self.live_song() {
@@ -1792,20 +1899,20 @@ impl NerdApp {
                             RichText::new(song.display_title())
                                 .size(13.0)
                                 .strong()
-                                .color(palette.text),
+                                .color(palette.colors.text),
                         );
                         if !song.artist.is_empty() {
                             ui.label(
                                 RichText::new(&song.artist)
                                     .size(11.5)
-                                    .color(palette.text_muted),
+                                    .color(palette.colors.text_secondary),
                             );
                         }
                     } else if let Some(next) = self.next_song() {
                         ui.label(
                             RichText::new(format!("Prossimo: {}", next.display_title()))
                                 .size(12.0)
-                                .color(palette.text_muted),
+                                .color(palette.colors.text_secondary),
                         );
                     }
                     if self.show.is_counting_down() {
@@ -1815,7 +1922,7 @@ impl NerdApp {
                                 "Prossimo tra {:.1}s",
                                 self.show.gap_remaining_ms().unwrap_or(0) as f32 / 1000.0
                             ),
-                            palette.warning,
+                            palette.colors.amber,
                         );
                     }
 
@@ -1826,9 +1933,9 @@ impl NerdApp {
                             crate::strings::SAVED
                         };
                         let save_color = if self.dirty {
-                            palette.warning
+                            palette.colors.amber
                         } else {
-                            palette.text_muted
+                            palette.colors.text_secondary
                         };
                         if ui
                             .add(
@@ -1857,16 +1964,16 @@ impl NerdApp {
                                         if self.project.output.blackout {
                                             Color32::WHITE
                                         } else {
-                                            palette.text_muted
+                                            palette.colors.text_secondary
                                         },
                                     ),
                                 )
                                 .fill(if self.project.output.blackout {
-                                    palette.danger
+                                    palette.colors.red
                                 } else {
-                                    palette.raised
+                                    palette.colors.card
                                 })
-                                .stroke(Stroke::new(1.0, palette.border))
+                                .stroke(Stroke::new(1.0, palette.colors.separator))
                                 .corner_radius(egui::CornerRadius::same(7)),
                             )
                             .on_hover_text("Blackout uscita video (⌘B)")
@@ -1875,9 +1982,9 @@ impl NerdApp {
                             self.toggle_blackout();
                         }
                         let output_color = if self.output_open {
-                            palette.accent
+                            palette.colors.accent
                         } else {
-                            palette.text_muted
+                            palette.colors.text_secondary
                         };
                         if ui
                             .add(
@@ -1886,8 +1993,8 @@ impl NerdApp {
                                         .size(11.0)
                                         .color(output_color),
                                 )
-                                .fill(palette.raised)
-                                .stroke(Stroke::new(1.0, palette.border))
+                                .fill(palette.colors.card)
+                                .stroke(Stroke::new(1.0, palette.colors.separator))
                                 .corner_radius(egui::CornerRadius::same(7)),
                             )
                             .on_hover_text("Apri o chiudi l'uscita video")
@@ -1896,7 +2003,7 @@ impl NerdApp {
                             self.toggle_output(ui.ctx());
                         }
                         if let Some(release) = self.updater.available() {
-                            let color = palette.title;
+                            let color = palette.colors.title;
                             if ui
                                 .add(
                                     egui::Button::new(
@@ -1919,6 +2026,7 @@ impl NerdApp {
             });
     }
 
+    #[allow(dead_code)]
     fn recovery_banner(&mut self, ui: &mut egui::Ui) {
         if !self.recovery_prompt || self.recovery.is_none() {
             return;
@@ -1927,9 +2035,9 @@ impl NerdApp {
         egui::Panel::top("recovery-banner")
             .frame(
                 egui::Frame::new()
-                    .fill(palette.warning.gamma_multiply(0.12))
+                    .fill(palette.colors.amber.gamma_multiply(0.12))
                     .inner_margin(egui::Margin::symmetric(18, 8))
-                    .stroke(Stroke::new(1.0, palette.warning.gamma_multiply(0.4))),
+                    .stroke(Stroke::new(1.0, palette.colors.amber.gamma_multiply(0.4))),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1937,14 +2045,14 @@ impl NerdApp {
                         RichText::new("Sessione non salvata rilevata")
                             .size(12.0)
                             .strong()
-                            .color(palette.warning),
+                            .color(palette.colors.amber),
                     );
                     ui.label(
                         RichText::new(
                             "L'app è stata chiusa in modo imprevisto durante l'ultima serata.",
                         )
                         .size(11.5)
-                        .color(palette.text_muted),
+                        .color(palette.colors.text_secondary),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::widgets::accent_button(ui, palette, "Ripristina sessione")
@@ -1960,6 +2068,7 @@ impl NerdApp {
             });
     }
 
+    #[allow(dead_code)]
     fn missing_banner(&mut self, ui: &mut egui::Ui) {
         if self.missing.is_empty() {
             return;
@@ -1975,9 +2084,9 @@ impl NerdApp {
         egui::Panel::top("missing-banner")
             .frame(
                 egui::Frame::new()
-                    .fill(palette.danger.gamma_multiply(0.1))
+                    .fill(palette.colors.red.gamma_multiply(0.1))
                     .inner_margin(egui::Margin::symmetric(18, 7))
-                    .stroke(Stroke::new(1.0, palette.danger.gamma_multiply(0.35))),
+                    .stroke(Stroke::new(1.0, palette.colors.red.gamma_multiply(0.35))),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1985,12 +2094,12 @@ impl NerdApp {
                         RichText::new(format!("⚠ {count} file mancanti"))
                             .size(11.5)
                             .strong()
-                            .color(palette.danger),
+                            .color(palette.colors.red),
                     );
                     ui.label(
                         RichText::new(names.join(", "))
                             .size(11.0)
-                            .color(palette.text_muted),
+                            .color(palette.colors.text_secondary),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::widgets::ghost_button(ui, palette, "Ricollega…").clicked() {
@@ -2001,32 +2110,33 @@ impl NerdApp {
             });
     }
 
+    #[allow(dead_code)]
     fn footer_ui(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
         egui::Panel::bottom("workspace-pages")
             .frame(
                 egui::Frame::new()
-                    .fill(palette.panel_alt)
+                    .fill(palette.colors.card)
                     .inner_margin(egui::Margin::symmetric(16, 7))
-                    .stroke(Stroke::new(1.0, palette.border)),
+                    .stroke(Stroke::new(1.0, palette.colors.separator)),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for page in Page::ALL {
                         let selected = self.page == page;
                         let text = RichText::new(page.title()).size(12.5).color(if selected {
-                            palette.text
+                            palette.colors.text
                         } else {
-                            palette.text_muted
+                            palette.colors.text_secondary
                         });
                         let button = egui::Button::new(text)
                             .fill(if selected {
-                                palette.raised
+                                palette.colors.card
                             } else {
                                 Color32::TRANSPARENT
                             })
                             .stroke(if selected {
-                                Stroke::new(1.0, palette.border)
+                                Stroke::new(1.0, palette.colors.separator)
                             } else {
                                 Stroke::NONE
                             })
@@ -2051,7 +2161,7 @@ impl NerdApp {
                         ui.label(
                             RichText::new("Spazio GO · P Pausa · S Stop · N Salta · B Indietro")
                                 .size(10.5)
-                                .color(palette.text_muted),
+                                .color(palette.colors.text_secondary),
                         );
                     });
                 });
@@ -2074,7 +2184,7 @@ impl NerdApp {
                 ui.label(
                     RichText::new("Durante lo spettacolo")
                         .size(12.0)
-                        .color(palette.text_muted),
+                        .color(palette.colors.text_secondary),
                 );
                 ui.add_space(6.0);
                 for (key, action) in [
@@ -2089,7 +2199,11 @@ impl NerdApp {
                     crate::widgets::shortcut_chip(ui, palette, key, action);
                 }
                 ui.add_space(10.0);
-                ui.label(RichText::new("Sempre").size(12.0).color(palette.text_muted));
+                ui.label(
+                    RichText::new("Sempre")
+                        .size(12.0)
+                        .color(palette.colors.text_secondary),
+                );
                 ui.add_space(6.0);
                 for (key, action) in [
                     ("⌘N", "Nuova serata"),
@@ -2131,19 +2245,19 @@ impl NerdApp {
                     RichText::new(nerd_core::APP_NAME)
                         .size(24.0)
                         .strong()
-                        .color(palette.text),
+                        .color(palette.colors.text),
                 );
                 ui.label(
                     RichText::new(format!("Alpha {}", nerd_core::APP_VERSION))
                         .size(12.0)
-                        .color(palette.accent),
+                        .color(palette.colors.accent),
                 );
                 ui.add_space(10.0);
                 ui.label("Regia audio e video per le serate della scuola di musica.");
                 ui.label(
                     RichText::new("macOS 13+ · Universal · Rust")
                         .size(11.0)
-                        .color(palette.text_muted),
+                        .color(palette.colors.text_secondary),
                 );
                 ui.add_space(12.0);
                 if ui.button("Chiudi").clicked() {
@@ -2210,7 +2324,7 @@ impl NerdApp {
                         ui.label(
                             RichText::new(format!("In onda: {title}"))
                                 .strong()
-                                .color(self.palette.warning),
+                                .color(self.palette.colors.amber),
                         );
                         ui.add_space(4.0);
                     }
@@ -2260,7 +2374,7 @@ impl NerdApp {
                         nerd_core::APP_VERSION
                     ))
                     .size(11.0)
-                    .color(palette.text_muted),
+                    .color(palette.colors.text_secondary),
                 );
                 ui.add_space(8.0);
                 ui.label(status.description());
@@ -2280,7 +2394,7 @@ impl NerdApp {
                         ui.label(
                             RichText::new(meta)
                                 .size(10.5)
-                                .color(palette.text_muted),
+                                .color(palette.colors.text_secondary),
                         );
                         if release.zip_size > 0 {
                             ui.label(
@@ -2289,7 +2403,7 @@ impl NerdApp {
                                     release.zip_size as f32 / 1_000_000.0
                                 ))
                                 .size(11.0)
-                                .color(palette.text_muted),
+                                .color(palette.colors.text_secondary),
                             );
                         }
                         if !release.notes.trim().is_empty() {
@@ -2300,7 +2414,7 @@ impl NerdApp {
                                     ui.label(
                                         RichText::new(&release.notes)
                                             .size(11.5)
-                                            .color(palette.text_muted),
+                                            .color(palette.colors.text_secondary),
                                     );
                                 });
                         }
@@ -2340,7 +2454,7 @@ impl NerdApp {
                                 "L'app verrà sostituita e riavviata. L'installazione avviene solo su conferma.",
                             )
                             .size(11.0)
-                            .color(palette.text_muted),
+                            .color(palette.colors.text_secondary),
                         );
                         ui.add_space(8.0);
                         let blocked = self.show_is_active();
@@ -2361,13 +2475,13 @@ impl NerdApp {
                                     "Ferma lo spettacolo per installare l'aggiornamento.",
                                 )
                                 .size(11.0)
-                                .color(palette.warning),
+                                .color(palette.colors.amber),
                             );
                         }
                     }
                     UpdateStatus::Error(error) => {
                         ui.add_space(6.0);
-                        ui.label(RichText::new(error).color(palette.danger));
+                        ui.label(RichText::new(error).color(palette.colors.red));
                     }
                     _ => {}
                 }
@@ -2401,17 +2515,17 @@ impl NerdApp {
         };
         let palette = self.palette;
         let color = match snackbar.toast.kind {
-            ToastKind::Info => palette.title,
-            ToastKind::Success => palette.success,
-            ToastKind::Warning => palette.warning,
-            ToastKind::Error => palette.danger,
+            ToastKind::Info => palette.colors.title,
+            ToastKind::Success => palette.colors.green,
+            ToastKind::Warning => palette.colors.amber,
+            ToastKind::Error => palette.colors.red,
         };
         egui::Area::new(egui::Id::unique("project-nerd-toast"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_TOP, [-20.0, 78.0])
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(palette.raised)
+                    .fill(palette.colors.card)
                     .stroke(Stroke::new(1.0, color.gamma_multiply(0.5)))
                     .corner_radius(egui::CornerRadius::same(10))
                     .inner_margin(egui::Margin::symmetric(14, 10))
@@ -2422,7 +2536,7 @@ impl NerdApp {
                             ui.label(
                                 RichText::new(&snackbar.toast.message)
                                     .size(12.0)
-                                    .color(palette.text),
+                                    .color(palette.colors.text),
                             );
                         });
                     });
@@ -2440,8 +2554,8 @@ impl NerdApp {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 egui::Frame::new()
-                    .fill(palette.panel.gamma_multiply(0.96))
-                    .stroke(Stroke::new(2.0, palette.accent))
+                    .fill(palette.colors.panel.gamma_multiply(0.96))
+                    .stroke(Stroke::new(2.0, palette.colors.accent))
                     .corner_radius(egui::CornerRadius::same(16))
                     .inner_margin(egui::Margin::same(30))
                     .show(ui, |ui| {
@@ -2449,12 +2563,12 @@ impl NerdApp {
                             RichText::new("Rilascia per importare")
                                 .size(18.0)
                                 .strong()
-                                .color(palette.text),
+                                .color(palette.colors.text),
                         );
                         ui.label(
                             RichText::new("Audio, video o una serata .nerdshow")
                                 .size(12.0)
-                                .color(palette.text_muted),
+                                .color(palette.colors.text_secondary),
                         );
                     });
             });
@@ -2535,7 +2649,7 @@ impl NerdApp {
         }
     }
 
-    fn restore_recovery(&mut self) {
+    pub(crate) fn restore_recovery(&mut self) {
         let Some(mut project) = self.recovery.take() else {
             return;
         };
@@ -2560,27 +2674,27 @@ impl NerdApp {
         self.toast("Sessione ripristinata.", ToastKind::Success);
     }
 
-    fn discard_recovery(&mut self) {
+    pub(crate) fn discard_recovery(&mut self) {
         self.recovery = None;
         self.recovery_prompt = false;
         persistence::clear_recovery(&self.paths.support);
         self.toast("Sessione di recupero ignorata.", ToastKind::Info);
     }
 
-    fn ui_frame(&mut self, ui: &mut egui::Ui) {
+    fn ui_frame(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_dropped_files(&ctx);
         self.handle_shortcuts(&ctx);
 
-        self.header_ui(ui);
-        self.recovery_banner(ui);
-        self.missing_banner(ui);
-        self.footer_ui(ui);
+        crate::shell::titlebar(self, ui, frame);
+        crate::shell::recovery_banner(self, ui);
+        crate::shell::missing_banner(self, ui);
+        crate::shell::pagebar(self, ui);
 
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(self.palette.background)
+                    .fill(self.palette.colors.window)
                     .inner_margin(egui::Margin::ZERO),
             )
             .show(ui, |ui| {
@@ -2599,12 +2713,12 @@ impl eframe::App for NerdApp {
         self.logic_frame(ctx);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.ui_frame(ui);
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.ui_frame(ui, frame);
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        self.palette.background.to_normalized_gamma_f32()
+        self.palette.colors.window.to_normalized_gamma_f32()
     }
 }
 

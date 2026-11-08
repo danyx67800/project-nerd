@@ -1,170 +1,165 @@
-//! Sanremo-style title card designer with a live 16:9 preview.
+//! Titoli: template gallery, live 16:9 preview and text inspector.
 
 use std::time::Instant;
 
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, ScrollArea,
-    Sense, Stroke, Ui, Vec2,
+    self, Align, Align2, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Sense, Ui, Vec2,
 };
 use nerd_core::model::{Song, TitleAnimation, TitleLine, TitlePosition, TitleTemplate};
 
 use crate::app::NerdApp;
 use crate::output;
-use crate::state::{Page, ToastKind};
-use crate::widgets;
+use crate::state::Page;
+use crate::strings;
+use nerd_ui_kit::{
+    body, caption, icon_button, labeled_field, primary_button, section, section_label, segmented,
+    slider, status_pill, toggle, Button, ButtonVariant, Icon, Theme,
+};
 
 pub fn show(app: &mut NerdApp, ui: &mut Ui) {
-    egui::Panel::left("titles-songs")
-        .resizable(true)
-        .default_size(268.0)
-        .min_size(220.0)
-        .max_size(340.0)
-        .frame(
-            egui::Frame::new()
-                .fill(app.palette.panel)
-                .inner_margin(egui::Margin::same(14))
-                .stroke(Stroke::new(1.0, app.palette.border)),
-        )
-        .show(ui, |ui| song_list(app, ui));
-
-    egui::Panel::right("titles-inspector")
-        .resizable(true)
-        .default_size(348.0)
-        .min_size(300.0)
-        .max_size(470.0)
-        .frame(
-            egui::Frame::new()
-                .fill(app.palette.panel)
-                .inner_margin(egui::Margin::same(16))
-                .stroke(Stroke::new(1.0, app.palette.border)),
-        )
-        .show(ui, |ui| {
-            ScrollArea::vertical()
-                .id_salt("titles-inspector-scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    template_editor(app, ui);
-                    ui.add_space(18.0);
-                    song_editor(app, ui);
-                });
-        });
-
+    if app.chrome.titles_sidebar {
+        egui::Panel::left("titles-browser")
+            .resizable(true)
+            .default_size(258.0)
+            .min_size(220.0)
+            .max_size(340.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(app.palette.colors.panel)
+                    .inner_margin(egui::Margin::symmetric(12, 12)),
+            )
+            .show(ui, |ui| browser(app, ui));
+    }
+    if app.chrome.inspector_open {
+        egui::Panel::right("titles-inspector")
+            .resizable(true)
+            .default_size(344.0)
+            .min_size(300.0)
+            .max_size(460.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(app.palette.colors.panel)
+                    .inner_margin(egui::Margin::same(0)),
+            )
+            .show(ui, |ui| inspector(app, ui));
+    }
     egui::CentralPanel::default()
         .frame(
             egui::Frame::new()
-                .fill(app.palette.background)
-                .inner_margin(egui::Margin::same(20)),
+                .fill(app.palette.colors.window)
+                .inner_margin(egui::Margin::same(18)),
         )
         .show(ui, |ui| preview(app, ui));
 }
 
-fn song_list(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+fn browser(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("Titoli")
+                .size(15.0)
+                .strong()
+                .color(theme.colors.text),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if icon_button(
+                ui,
+                &theme,
+                Icon::Sidebar,
+                Some("Nascondi la barra"),
+                app.chrome.titles_sidebar,
+            )
+            .clicked()
+            {
+                app.chrome.titles_sidebar = false;
+            }
+        });
+    });
     ui.label(
-        RichText::new(crate::strings::PAGE_TITLES)
-            .size(22.0)
-            .strong()
-            .color(palette.text),
-    );
-    ui.label(
-        RichText::new("Scegli il brano da vestire, poi modella il template.")
-            .size(10.5)
-            .color(palette.text_muted),
+        RichText::new("Scegli un template, poi vesti il brano.")
+            .font(caption())
+            .color(theme.colors.text_secondary),
     );
     ui.add_space(10.0);
-    egui::Frame::new()
-        .fill(palette.accent_soft)
-        .stroke(Stroke::new(1.0, palette.accent.gamma_multiply(0.4)))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(egui::Margin::same(9))
+    section_label(ui, &theme, "Template");
+    ui.add_space(4.0);
+    ScrollArea::vertical()
+        .id_salt("title-templates")
+        .max_height(222.0)
+        .auto_shrink([false, true])
         .show(ui, |ui| {
-            ui.label(
-                RichText::new(&app.project.title_template.name)
-                    .size(11.0)
-                    .strong()
-                    .color(palette.accent),
-            );
-            ui.label(
-                RichText::new("Template attivo")
-                    .size(9.5)
-                    .color(palette.text_muted),
-            );
+            for (name, subtitle, preset) in [
+                ("Classica", "Pannello · basso", Preset::Classic),
+                ("Minimal", "Solo testo · centro", Preset::Minimal),
+                ("Serata", "Accento · alto", Preset::Show),
+            ] {
+                template_card(app, ui, &theme, name, subtitle, preset);
+            }
         });
     ui.add_space(8.0);
-
+    section_label(ui, &theme, "Brani");
+    ui.add_space(4.0);
     if app.project.songs.is_empty() {
-        widgets::empty_state(
+        nerd_ui_kit::empty_state(
             ui,
-            palette,
+            &theme,
+            Icon::Music,
             "Nessun brano",
-            "Aggiungi brani alla scaletta per creare i titoli.",
+            "Aggiungi brani alla scaletta.",
+            |_ui| {},
         );
         return;
     }
-
+    let songs: Vec<Song> = app.project.songs.clone();
     ScrollArea::vertical()
-        .id_salt("titles-song-list")
+        .id_salt("title-songs")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let songs: Vec<(usize, Song)> = app
-                .project
-                .songs
-                .iter()
-                .enumerate()
-                .map(|(index, song)| (index, song.clone()))
-                .collect();
-            for (index, song) in songs {
+            for (index, song) in songs.iter().enumerate() {
                 let selected = app.selected_song.as_deref() == Some(song.id.as_str());
                 let live = app.show.live_index() == Some(index);
                 let custom = !song.info.is_empty();
                 let width = ui.available_width();
                 let (rect, response) =
-                    ui.allocate_exact_size(Vec2::new(width, 52.0), Sense::click());
-                let hovered = response.hovered();
-                ui.painter().rect(
-                    rect,
-                    CornerRadius::same(8),
-                    if selected {
-                        palette.raised
-                    } else if hovered {
-                        palette.raised.gamma_multiply(0.55)
-                    } else {
-                        Color32::TRANSPARENT
-                    },
-                    if selected {
-                        Stroke::new(1.0, palette.accent.gamma_multiply(0.5))
-                    } else {
-                        Stroke::NONE
-                    },
-                    egui::StrokeKind::Inside,
-                );
+                    ui.allocate_exact_size(Vec2::new(width, 46.0), Sense::click());
+                if selected || response.hovered() {
+                    ui.painter().rect_filled(
+                        rect,
+                        CornerRadius::same(6),
+                        if selected {
+                            theme.colors.accent_soft
+                        } else {
+                            theme.colors.hover
+                        },
+                    );
+                }
                 ui.painter().text(
-                    Pos2::new(rect.left() + 9.0, rect.top() + 9.0),
+                    Pos2::new(rect.left() + 9.0, rect.top() + 8.0),
                     Align2::LEFT_TOP,
-                    truncate(&song.display_title(), 25),
-                    FontId::proportional(12.0),
-                    palette.text,
+                    truncate(&song.display_title(), 26),
+                    body(),
+                    theme.colors.text,
                 );
                 ui.painter().text(
-                    Pos2::new(rect.left() + 9.0, rect.top() + 28.0),
+                    Pos2::new(rect.left() + 9.0, rect.top() + 26.0),
                     Align2::LEFT_TOP,
                     if custom {
                         "Testo personalizzato".to_string()
                     } else {
-                        "Titolo e artista del brano".to_string()
+                        "Titolo del brano".to_string()
                     },
-                    FontId::proportional(9.5),
+                    caption(),
                     if custom {
-                        palette.title
+                        theme.colors.title
                     } else {
-                        palette.text_muted
+                        theme.colors.text_tertiary
                     },
                 );
                 if live {
                     ui.painter().circle_filled(
                         Pos2::new(rect.right() - 12.0, rect.center().y),
                         3.5,
-                        palette.accent,
+                        theme.colors.green,
                     );
                 }
                 if response.clicked() {
@@ -172,29 +167,151 @@ fn song_list(app: &mut NerdApp, ui: &mut Ui) {
                     app.preview_anchor = Instant::now();
                 }
             }
+            ui.add_space(10.0);
         });
 }
 
+#[derive(Clone, Copy)]
+enum Preset {
+    Classic,
+    Minimal,
+    Show,
+}
+
+fn template_card(
+    app: &mut NerdApp,
+    ui: &mut Ui,
+    theme: &Theme,
+    name: &str,
+    subtitle: &str,
+    preset: Preset,
+) {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 64.0), Sense::click());
+    let active = app.project.title_template.name == name;
+    if active || response.hovered() {
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(7),
+            if active {
+                theme.colors.accent_soft
+            } else {
+                theme.colors.hover
+            },
+            egui::Stroke::new(
+                1.0,
+                if active {
+                    theme.colors.accent
+                } else {
+                    theme.colors.separator
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let preview = Rect::from_min_size(
+        Pos2::new(rect.left() + 7.0, rect.top() + 7.0),
+        Vec2::new(56.0, 32.0),
+    );
+    ui.painter()
+        .rect_filled(preview, CornerRadius::same(3), theme.colors.well);
+    let line_y = match preset {
+        Preset::Classic => preview.top() + 20.0,
+        Preset::Minimal => preview.center().y,
+        Preset::Show => preview.top() + 8.0,
+    };
+    ui.painter().rect_filled(
+        Rect::from_min_size(
+            Pos2::new(preview.left() + 7.0, line_y),
+            Vec2::new(42.0, 2.0),
+        ),
+        CornerRadius::same(1),
+        theme.colors.text,
+    );
+    ui.painter().rect_filled(
+        Rect::from_min_size(
+            Pos2::new(preview.left() + 7.0, line_y + 5.0),
+            Vec2::new(27.0, 1.5),
+        ),
+        CornerRadius::same(1),
+        theme.colors.text_secondary,
+    );
+    ui.painter().text(
+        Pos2::new(preview.right() + 8.0, rect.top() + 14.0),
+        Align2::LEFT_TOP,
+        name,
+        body(),
+        theme.colors.text,
+    );
+    ui.painter().text(
+        Pos2::new(preview.right() + 8.0, rect.top() + 33.0),
+        Align2::LEFT_TOP,
+        subtitle,
+        caption(),
+        theme.colors.text_secondary,
+    );
+    if response.clicked() {
+        let before = app.project.clone();
+        let mut template = app.project.title_template.clone();
+        template.name = name.to_string();
+        match preset {
+            Preset::Classic => {
+                template.position = TitlePosition::Lower;
+                template.panel = true;
+                template.panel_opacity = 0.55;
+                template.title_size_pct = 5.2;
+                template.body_size_pct = 2.3;
+                template.animation = TitleAnimation::SlideUp;
+            }
+            Preset::Minimal => {
+                template.position = TitlePosition::Center;
+                template.panel = false;
+                template.panel_opacity = 0.0;
+                template.title_size_pct = 4.2;
+                template.body_size_pct = 1.8;
+                template.animation = TitleAnimation::Fade;
+            }
+            Preset::Show => {
+                template.position = TitlePosition::Upper;
+                template.panel = true;
+                template.panel_opacity = 0.36;
+                template.title_size_pct = 6.4;
+                template.body_size_pct = 2.6;
+                template.animation = TitleAnimation::Scale;
+            }
+        }
+        app.project.title_template = template;
+        app.commit_edit(&before);
+        app.preview_anchor = Instant::now();
+    }
+}
+
 fn preview(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
+    let theme = app.palette;
     let Some(song) = app.selected_song().cloned().or_else(|| {
         app.project
             .songs
             .get(app.show.live_index().unwrap_or(0))
             .cloned()
     }) else {
-        widgets::empty_state(
+        nerd_ui_kit::empty_state(
             ui,
-            palette,
-            "Nessun titolo da mostrare",
-            "Aggiungi un brano alla scaletta.",
+            &theme,
+            Icon::Titles,
+            "Nessun titolo",
+            "Aggiungi un brano alla scaletta per progettare la sua intestazione.",
+            |ui| {
+                if primary_button(ui, &theme, "Apri la libreria").clicked() {
+                    app.page = Page::Library;
+                }
+            },
         );
         return;
     };
 
     let cycle = app.project.title_template.delay_ms
         + if app.project.title_template.duration_ms == 0 {
-            8_000
+            9_000
         } else {
             app.project.title_template.duration_ms
         }
@@ -205,398 +322,490 @@ fn preview(app: &mut NerdApp, ui: &mut Ui) {
         elapsed = 0;
     }
     let state = app.projector_preview(ui.ctx(), &song, elapsed);
+    let template = app.project.title_template.clone();
 
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.label(
-                RichText::new("Anteprima in tempo reale")
+                RichText::new("Anteprima titolo")
                     .size(22.0)
                     .strong()
-                    .color(palette.text),
+                    .color(theme.colors.text),
             );
             ui.label(
-                RichText::new(
-                    "Titoli, posizione, animazione e colori sono gli stessi dell'uscita video.",
-                )
-                .size(10.5)
-                .color(palette.text_muted),
+                RichText::new(format!("{} · {}", song.display_title(), template.name))
+                    .font(caption())
+                    .color(theme.colors.text_secondary),
             );
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .add(
-                    egui::Button::new("Riavvia anteprima")
-                        .fill(palette.raised)
-                        .stroke(Stroke::new(1.0, palette.border))
-                        .corner_radius(CornerRadius::same(7)),
-                )
+            if Button::new("Riavvia")
+                .variant(ButtonVariant::Plain)
+                .icon(Icon::Refresh)
+                .show(ui, &theme)
                 .clicked()
             {
                 app.preview_anchor = Instant::now();
             }
-            widgets::pill(ui, "LOOP", palette.title);
+            if app.project.output.show_titles {
+                status_pill(ui, &theme, "Titoli attivi", theme.colors.green, None);
+            } else {
+                status_pill(ui, &theme, "Titoli spenti", theme.colors.amber, None);
+            }
         });
     });
-    ui.add_space(10.0);
+    ui.add_space(8.0);
 
     let available = ui.available_size();
-    let height = (available.y * 0.68).clamp(220.0, 520.0);
+    let height = (available.y * 0.67).clamp(170.0, 470.0);
     let width = (height * 16.0 / 9.0).min(available.x);
     let top = ui.cursor().top();
-    let image_rect = Rect::from_min_size(
+    let canvas = Rect::from_min_size(
         Pos2::new(
             ui.available_rect_before_wrap().center().x - width / 2.0,
             top,
         ),
         Vec2::new(width, height),
     );
-    let (_, _) = ui.allocate_exact_size(Vec2::new(available.x, height + 8.0), Sense::hover());
-    ui.painter().rect(
-        image_rect.expand(1.0),
-        CornerRadius::same(15),
-        Color32::BLACK,
-        Stroke::new(1.0, palette.border),
-        egui::StrokeKind::Inside,
+    let (_, response) =
+        ui.allocate_exact_size(Vec2::new(available.x, height + 6.0), Sense::hover());
+    ui.painter()
+        .rect_filled(canvas, CornerRadius::same(10), theme.colors.blackout);
+    output::paint_output(ui.painter(), canvas, &state);
+    for corner in [
+        canvas.left_top(),
+        canvas.right_top(),
+        canvas.left_bottom(),
+        canvas.right_bottom(),
+    ] {
+        ui.painter().rect_filled(
+            Rect::from_center_size(corner, Vec2::splat(7.0)),
+            CornerRadius::same(2),
+            theme.colors.text,
+        );
+    }
+    let handle = Rect::from_center_size(
+        canvas.right_bottom() - Vec2::new(26.0, 26.0),
+        Vec2::splat(14.0),
     );
-    let painter = ui.painter().with_clip_rect(image_rect);
-    output::paint_output(&painter, image_rect, &state);
-
-    ui.add_space(10.0);
-    let template = &app.project.title_template;
-    let delay = template.delay_ms as f32;
-    let visible = if template.duration_ms == 0 {
-        cycle as f32
-    } else {
-        template.duration_ms as f32
-    };
-    let total = (delay + visible + 1_500.0).max(1.0);
-    let progress = (elapsed as f32 / total).clamp(0.0, 1.0);
-    egui::Frame::new()
-        .fill(palette.panel)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(egui::Margin::symmetric(14, 10))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!(
-                        "{} · delay {} · {}",
-                        song.display_title(),
-                        format_seconds(template.delay_ms),
-                        if template.duration_ms == 0 {
-                            "visibile per tutto il brano".to_string()
-                        } else {
-                            format!("visibile {}", format_seconds(template.duration_ms))
-                        }
-                    ))
-                    .size(10.5)
-                    .color(palette.text_muted),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(format!("{:.1}s", elapsed as f32 / 1000.0))
-                            .size(10.0)
-                            .color(palette.text_muted),
-                    );
-                });
-            });
-            let (rect, _) =
-                ui.allocate_exact_size(Vec2::new(ui.available_width(), 5.0), Sense::hover());
-            ui.painter()
-                .rect_filled(rect, CornerRadius::same(3), palette.background);
-            ui.painter().rect_filled(
-                Rect::from_min_size(rect.min, Vec2::new(rect.width() * progress, rect.height())),
-                CornerRadius::same(3),
-                palette.title,
-            );
-            let delay_x = rect.left() + rect.width() * (delay / total);
-            ui.painter().line_segment(
-                [
-                    Pos2::new(delay_x, rect.top() - 2.0),
-                    Pos2::new(delay_x, rect.bottom() + 2.0),
-                ],
-                Stroke::new(1.0, palette.accent),
-            );
-        });
+    let handle_response = ui.interact(
+        handle,
+        ui.scope_id().with("title-size-handle"),
+        Sense::drag(),
+    );
+    ui.painter().circle_filled(
+        handle.center(),
+        5.0,
+        if handle_response.hovered() || handle_response.dragged() {
+            theme.colors.accent
+        } else {
+            theme.colors.text
+        },
+    );
+    if handle_response.dragged() {
+        let before = app.project.clone();
+        let mut next = app.project.title_template.clone();
+        next.title_size_pct =
+            (next.title_size_pct + handle_response.drag_delta().y * 0.02).clamp(1.5, 18.0);
+        next.validate();
+        app.project.title_template = next;
+        app.commit_edit(&before);
+    }
+    let _ = response;
 
     ui.add_space(8.0);
+    title_strip(app, ui, &template, elapsed, cycle, &theme);
+    ui.add_space(8.0);
     ui.horizontal(|ui| {
-        if widgets::accent_button(ui, palette, "Apri uscita video").clicked() && !app.output_open {
+        if Button::new(if app.output_open {
+            "Uscita aperta"
+        } else {
+            "Apri uscita video"
+        })
+        .variant(ButtonVariant::Primary)
+        .icon(Icon::Monitor)
+        .show(ui, &theme)
+        .clicked()
+        {
             app.toggle_output(ui.ctx());
         }
-        if app.project.output.show_titles {
-            widgets::pill(ui, "TITOLI ATTIVI", palette.success);
-        } else {
-            widgets::pill(ui, "TITOLI DISATTIVATI", palette.warning);
-            if ui.button("Attiva").clicked() {
+        if !app.project.output.show_titles {
+            if Button::new("Attiva titoli")
+                .variant(ButtonVariant::Tinted)
+                .show(ui, &theme)
+                .clicked()
+            {
                 app.project.output.show_titles = true;
                 app.mark_dirty();
             }
+        } else if Button::new("Nascondi i titoli")
+            .variant(ButtonVariant::Plain)
+            .show(ui, &theme)
+            .clicked()
+        {
+            app.project.output.show_titles = false;
+            app.mark_dirty();
         }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                RichText::new(format!("{:.1}s", elapsed as f32 / 1000.0))
+                    .font(nerd_ui_kit::timecode(11.0))
+                    .color(theme.colors.text_secondary),
+            );
+        });
     });
 }
 
-fn template_editor(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
-    let before = app.project.title_template.clone();
-    let before_project = app.project.clone();
-    let mut template = before.clone();
-
-    ui.label(
-        RichText::new("Template")
-            .size(11.0)
-            .strong()
-            .color(palette.text_muted),
+fn title_strip(
+    app: &mut NerdApp,
+    ui: &mut Ui,
+    template: &TitleTemplate,
+    elapsed: u64,
+    cycle: u64,
+    theme: &Theme,
+) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 54.0), Sense::hover());
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(7), theme.colors.panel);
+    let inner = rect.shrink2(Vec2::new(12.0, 14.0));
+    ui.painter()
+        .rect_filled(inner, CornerRadius::same(4), theme.colors.well);
+    let total = cycle.max(1) as f32;
+    let delay = template.delay_ms as f32;
+    let visible = if template.duration_ms == 0 {
+        total - delay - 1_500.0
+    } else {
+        template.duration_ms as f32
+    };
+    let start = inner.left() + inner.width() * (delay / total);
+    let block = inner.width() * (visible.max(300.0) / total);
+    ui.painter().rect_filled(
+        Rect::from_min_size(
+            Pos2::new(start, inner.top()),
+            Vec2::new(block, inner.height()),
+        ),
+        CornerRadius::same(3),
+        theme.colors.title.gamma_multiply(0.42),
     );
-    ui.add_space(6.0);
-    ui.add(egui::TextEdit::singleline(&mut template.name).hint_text("Nome template"));
-    ui.add_space(6.0);
-
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("Posizione")
-                .size(10.5)
-                .color(palette.text_muted),
-        );
-        egui::ComboBox::from_id_salt("title-position")
-            .selected_text(position_label(template.position))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut template.position, TitlePosition::Upper, "Alta");
-                ui.selectable_value(&mut template.position, TitlePosition::Center, "Centro");
-                ui.selectable_value(&mut template.position, TitlePosition::Lower, "Bassa");
-            });
-    });
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("Animazione")
-                .size(10.5)
-                .color(palette.text_muted),
-        );
-        egui::ComboBox::from_id_salt("title-animation")
-            .selected_text(animation_label(template.animation))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut template.animation, TitleAnimation::None, "Nessuna");
-                ui.selectable_value(&mut template.animation, TitleAnimation::Fade, "Fade");
-                ui.selectable_value(&mut template.animation, TitleAnimation::SlideUp, "Salita");
-                ui.selectable_value(&mut template.animation, TitleAnimation::Scale, "Scala");
-            });
-    });
-
-    ui.add_space(8.0);
-    ui.add(
-        egui::Slider::new(&mut template.title_size_pct, 2.0..=12.0)
-            .text("Titolo")
-            .suffix(" %"),
+    ui.painter().text(
+        Pos2::new(start + 6.0, inner.center().y),
+        Align2::LEFT_CENTER,
+        "Titolo in onda",
+        caption(),
+        theme.colors.title,
     );
-    ui.add(
-        egui::Slider::new(&mut template.body_size_pct, 1.0..=6.0)
-            .text("Testo")
-            .suffix(" %"),
+    let playhead = inner.left() + inner.width() * (elapsed as f32 / total).clamp(0.0, 1.0);
+    ui.painter().line_segment(
+        [
+            Pos2::new(playhead, rect.top() + 4.0),
+            Pos2::new(playhead, rect.bottom() - 4.0),
+        ],
+        egui::Stroke::new(1.5, theme.colors.accent),
     );
-    ui.add_space(6.0);
-    color_row(ui, palette, "Titolo", &mut template.title_color);
-    color_row(ui, palette, "Testo", &mut template.text_color);
-    color_row(ui, palette, "Accento", &mut template.accent_color);
-
-    ui.add_space(8.0);
-    ui.checkbox(&mut template.panel, "Pannello dietro al testo");
-    ui.add_enabled(
-        template.panel,
-        egui::Slider::new(&mut template.panel_opacity, 0.0..=1.0)
-            .text("Opacità")
-            .show_value(true),
-    );
-
-    ui.add_space(6.0);
-    let mut delay = template.delay_ms as f64 / 1000.0;
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("Ritardo")
-                .size(10.5)
-                .color(palette.text_muted),
-        );
-        if ui
-            .add(
-                egui::DragValue::new(&mut delay)
-                    .range(0.0..=30.0)
-                    .speed(0.05)
-                    .suffix(" s"),
+    ui.painter().text(
+        Pos2::new(rect.left() + 2.0, rect.bottom() - 2.0),
+        Align2::LEFT_BOTTOM,
+        if template.duration_ms == 0 {
+            "Visibile per tutto il brano".to_string()
+        } else {
+            format!(
+                "{} · {}",
+                strings::format_timecode(template.delay_ms),
+                strings::format_timecode(template.duration_ms)
             )
-            .changed()
-        {
-            template.delay_ms = (delay * 1000.0) as u64;
-        }
-    });
-    let mut whole_song = template.duration_ms == 0;
-    if ui
-        .checkbox(&mut whole_song, "Visibile per tutto il brano")
-        .changed()
-    {
-        template.duration_ms = if whole_song { 0 } else { 8_500 };
-    }
-    if !whole_song {
-        let mut duration = template.duration_ms as f64 / 1000.0;
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Durata").size(10.5).color(palette.text_muted));
-            if ui
-                .add(
-                    egui::DragValue::new(&mut duration)
-                        .range(0.5..=120.0)
-                        .speed(0.1)
-                        .suffix(" s"),
-                )
-                .changed()
-            {
-                template.duration_ms = (duration * 1000.0) as u64;
+        },
+        caption(),
+        theme.colors.text_tertiary,
+    );
+    let _ = app;
+}
+
+fn inspector(app: &mut NerdApp, ui: &mut Ui) {
+    let theme = app.palette;
+    let before = app.project.clone();
+    let mut template = app.project.title_template.clone();
+    let template_before = template.clone();
+    let mut song = app.selected_song().cloned();
+    let song_before = song.clone();
+
+    ScrollArea::vertical()
+        .id_salt("titles-inspector-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("Titolo")
+                            .size(15.0)
+                            .strong()
+                            .color(theme.colors.text),
+                    );
+                    ui.label(
+                        RichText::new("Stile e testi dell'uscita")
+                            .font(caption())
+                            .color(theme.colors.text_secondary),
+                    );
+                });
+            });
+            ui.add_space(8.0);
+            nerd_ui_kit::divider(ui, &theme);
+
+            section(ui, &theme, "title-style", "Stile", true, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(16.0);
+                    ui.vertical(|ui| {
+                        ui.set_width((ui.available_width() - 16.0).max(140.0));
+                        labeled_field(ui, &theme, "Nome template", &mut template.name, "Template");
+                        ui.add_space(6.0);
+                        let mut pos = match template.position {
+                            TitlePosition::Upper => 0,
+                            TitlePosition::Center => 1,
+                            TitlePosition::Lower => 2,
+                        };
+                        if segmented(
+                            ui,
+                            &theme,
+                            "title-pos",
+                            &["Alta", "Centro", "Bassa"],
+                            &mut pos,
+                            200.0,
+                        )
+                        .changed()
+                        {
+                            template.position = match pos {
+                                0 => TitlePosition::Upper,
+                                1 => TitlePosition::Center,
+                                _ => TitlePosition::Lower,
+                            };
+                        }
+                        ui.add_space(5.0);
+                        let mut anim = match template.animation {
+                            TitleAnimation::None => 0,
+                            TitleAnimation::Fade => 1,
+                            TitleAnimation::SlideUp => 2,
+                            TitleAnimation::Scale => 3,
+                        };
+                        if segmented(
+                            ui,
+                            &theme,
+                            "title-anim",
+                            &["No", "Fade", "Salita", "Scala"],
+                            &mut anim,
+                            252.0,
+                        )
+                        .changed()
+                        {
+                            template.animation = match anim {
+                                0 => TitleAnimation::None,
+                                1 => TitleAnimation::Fade,
+                                2 => TitleAnimation::SlideUp,
+                                _ => TitleAnimation::Scale,
+                            };
+                        }
+                        ui.add_space(6.0);
+                        let mut title_size = template.title_size_pct;
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Titolo")
+                                    .font(caption())
+                                    .color(theme.colors.text_secondary),
+                            );
+                            if slider(ui, &theme, &mut title_size, 1.5..=18.0, "%", 120.0).changed()
+                            {
+                                template.title_size_pct = title_size;
+                            }
+                        });
+                        let mut body_size = template.body_size_pct;
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Testo")
+                                    .font(caption())
+                                    .color(theme.colors.text_secondary),
+                            );
+                            if slider(ui, &theme, &mut body_size, 1.0..=10.0, "%", 120.0).changed()
+                            {
+                                template.body_size_pct = body_size;
+                            }
+                        });
+                        ui.add_space(5.0);
+                        toggle(ui, &theme, &mut template.panel, "Pannello dietro al testo");
+                        if template.panel {
+                            let mut opacity = template.panel_opacity;
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new("Opacità")
+                                        .font(caption())
+                                        .color(theme.colors.text_secondary),
+                                );
+                                if slider(ui, &theme, &mut opacity, 0.0..=1.0, "", 120.0).changed()
+                                {
+                                    template.panel_opacity = opacity;
+                                }
+                            });
+                        }
+                        ui.add_space(5.0);
+                        let mut delay = template.delay_ms as f64 / 1000.0;
+                        nerd_ui_kit::number_field(
+                            ui,
+                            &theme,
+                            "Ritardo",
+                            &mut delay,
+                            0.0..=30.0,
+                            " s",
+                            0.1,
+                        );
+                        template.delay_ms = (delay * 1000.0) as u64;
+                        let mut whole = template.duration_ms == 0;
+                        if toggle(ui, &theme, &mut whole, "Visibile per tutto il brano").changed() {
+                            template.duration_ms = if whole { 0 } else { 8_500 };
+                        }
+                        if !whole {
+                            let mut duration = template.duration_ms as f64 / 1000.0;
+                            nerd_ui_kit::number_field(
+                                ui,
+                                &theme,
+                                "Durata",
+                                &mut duration,
+                                0.5..=120.0,
+                                " s",
+                                0.1,
+                            );
+                            template.duration_ms = (duration * 1000.0) as u64;
+                        }
+                    });
+                });
+            });
+
+            if let Some(song_ref) = song.as_mut() {
+                section(ui, &theme, "title-text", "Testi del brano", true, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(16.0);
+                        ui.vertical(|ui| {
+                            ui.set_width((ui.available_width() - 16.0).max(140.0));
+                            ui.label(
+                                RichText::new(song_ref.display_title())
+                                    .font(caption())
+                                    .color(theme.colors.accent),
+                            );
+                            ui.add_space(3.0);
+                            let mut title = song_ref.info.title.clone();
+                            if nerd_ui_kit::text_field(
+                                ui,
+                                &theme,
+                                &mut title,
+                                "Titolo (vuoto = brano)",
+                            )
+                            .changed()
+                            {
+                                song_ref.info.title = title;
+                            }
+                            ui.add_space(4.0);
+                            let mut artist = song_ref.info.artist.clone();
+                            if nerd_ui_kit::text_field(
+                                ui,
+                                &theme,
+                                &mut artist,
+                                "Artista (vuoto = brano)",
+                            )
+                            .changed()
+                            {
+                                song_ref.info.artist = artist;
+                            }
+                            ui.add_space(4.0);
+                            let mut authors = song_ref.info.authors.clone();
+                            if nerd_ui_kit::text_field(ui, &theme, &mut authors, "Autori").changed()
+                            {
+                                song_ref.info.authors = authors;
+                            }
+                            ui.add_space(4.0);
+                            let mut performers = song_ref.info.performers.clone();
+                            if nerd_ui_kit::text_field(
+                                ui,
+                                &theme,
+                                &mut performers,
+                                "Interpreti / classe",
+                            )
+                            .changed()
+                            {
+                                song_ref.info.performers = performers;
+                            }
+                            ui.add_space(6.0);
+                            let mut extra = song_ref.info.extra_lines.join("\n");
+                            if nerd_ui_kit::text_field(ui, &theme, &mut extra, "Righe aggiuntive")
+                                .changed()
+                            {
+                                song_ref.info.extra_lines = extra
+                                    .lines()
+                                    .map(|line| line.trim().to_string())
+                                    .filter(|line| !line.is_empty())
+                                    .collect();
+                            }
+                            ui.add_space(6.0);
+                            let lines = song_ref
+                                .info
+                                .resolved_lines(&song_ref.title, &song_ref.artist);
+                            for line in &lines {
+                                let text = match line {
+                                    TitleLine::Title(text) => text,
+                                    TitleLine::Artist(text) => text,
+                                    TitleLine::Meta(text) => text,
+                                };
+                                ui.label(
+                                    RichText::new(format!("· {text}"))
+                                        .font(caption())
+                                        .color(theme.colors.text),
+                                );
+                            }
+                        });
+                    });
+                });
             }
+
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                if Button::new("Ripristina template")
+                    .variant(ButtonVariant::Plain)
+                    .show(ui, &theme)
+                    .clicked()
+                {
+                    app.project.title_template = TitleTemplate::default();
+                    app.commit_edit(&before);
+                    app.preview_anchor = Instant::now();
+                }
+                if Button::new("Vai alla scaletta")
+                    .variant(ButtonVariant::Secondary)
+                    .icon(Icon::Timeline)
+                    .show(ui, &theme)
+                    .clicked()
+                {
+                    app.page = Page::Timeline;
+                }
+            });
+            ui.add_space(16.0);
         });
-    }
 
     template.validate();
     if serde_json::to_string(&template).unwrap_or_default()
-        != serde_json::to_string(&before).unwrap_or_default()
+        != serde_json::to_string(&template_before).unwrap_or_default()
     {
-        app.project.title_template = template.clone();
-        app.commit_edit(&before_project);
+        app.project.title_template = template;
+        app.commit_edit(&before);
         app.preview_anchor = Instant::now();
     }
-
-    ui.add_space(8.0);
-    if ui
-        .add(
-            egui::Button::new(
-                RichText::new("Ripristina template di fabbrica")
-                    .size(10.5)
-                    .color(palette.text_muted),
-            )
-            .frame(false),
-        )
-        .clicked()
-    {
-        app.project.title_template = TitleTemplate::default();
-        app.commit_edit(&before_project);
-        app.mark_dirty();
-        app.toast("Template titoli ripristinato.", ToastKind::Info);
-    }
-}
-
-fn song_editor(app: &mut NerdApp, ui: &mut Ui) {
-    let palette = app.palette;
-    let Some(index) = app.selected_song_index() else {
-        return;
-    };
-    let before_project = app.project.clone();
-    let mut song = app.project.songs[index].clone();
-    let before = serde_json::to_string(&song).unwrap_or_default();
-
-    ui.label(
-        RichText::new("Testi del brano")
-            .size(11.0)
-            .strong()
-            .color(palette.text_muted),
-    );
-    ui.add_space(4.0);
-    ui.label(
-        RichText::new(format!("Per: {}", song.display_title()))
-            .size(10.5)
-            .color(palette.accent),
-    );
-    ui.add_space(6.0);
-    ui.add(
-        egui::TextEdit::singleline(&mut song.info.title)
-            .hint_text("Titolo (vuoto = titolo del brano)"),
-    );
-    ui.add(
-        egui::TextEdit::singleline(&mut song.info.artist)
-            .hint_text("Artista (vuoto = artista del brano)"),
-    );
-    ui.add(egui::TextEdit::singleline(&mut song.info.authors).hint_text("Autori / compositori"));
-    ui.add(egui::TextEdit::singleline(&mut song.info.performers).hint_text("Interpreti / classe"));
-    let mut extra = song.info.extra_lines.join("\n");
-    if ui
-        .add(
-            egui::TextEdit::multiline(&mut extra)
-                .desired_rows(3)
-                .hint_text("Righe aggiuntive, una per riga"),
-        )
-        .changed()
-    {
-        song.info.extra_lines = extra
-            .lines()
-            .map(|line| line.trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect();
-    }
-
-    let lines = song.info.resolved_lines(&song.title, &song.artist);
-    if !lines.is_empty() {
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("Righe in onda")
-                .size(9.5)
-                .color(palette.text_muted),
-        );
-        for line in &lines {
-            let text = match line {
-                TitleLine::Title(text) => text,
-                TitleLine::Artist(text) => text,
-                TitleLine::Meta(text) => text,
-            };
-            ui.label(
-                RichText::new(format!("· {text}"))
-                    .size(10.5)
-                    .color(palette.text),
-            );
+    if let (Some(song), Some(before_song)) = (song, song_before) {
+        if serde_json::to_string(&song).unwrap_or_default()
+            != serde_json::to_string(&before_song).unwrap_or_default()
+        {
+            if let Some(index) = app.project.songs.iter().position(|s| s.id == song.id) {
+                app.project.songs[index] = song;
+                app.commit_edit(&before);
+                app.preview_anchor = Instant::now();
+            }
         }
-    }
-
-    if serde_json::to_string(&song).unwrap_or_default() != before {
-        app.project.songs[index] = song.clone();
-        app.commit_edit(&before_project);
-        app.preview_anchor = Instant::now();
-    }
-
-    ui.add_space(10.0);
-    ui.horizontal(|ui| {
-        if ui.button("Vai all'inspector del brano").clicked() {
-            app.page = Page::Timeline;
-        }
-        if ui.button("Apri la scaletta").clicked() {
-            app.page = Page::Timeline;
-        }
-    });
-}
-
-fn color_row(ui: &mut Ui, palette: crate::theme::Palette, label: &str, rgba: &mut [u8; 4]) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(10.5).color(palette.text_muted));
-        let mut color = Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
-        if ui.color_edit_button_srgba(&mut color).changed() {
-            *rgba = color.to_array();
-        }
-        ui.label(
-            RichText::new(format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2]))
-                .size(9.5)
-                .color(palette.text_muted)
-                .monospace(),
-        );
-    });
-}
-
-fn position_label(position: TitlePosition) -> &'static str {
-    match position {
-        TitlePosition::Upper => "Alta",
-        TitlePosition::Center => "Centro",
-        TitlePosition::Lower => "Bassa",
-    }
-}
-
-fn animation_label(animation: TitleAnimation) -> &'static str {
-    match animation {
-        TitleAnimation::None => "Nessuna",
-        TitleAnimation::Fade => "Fade",
-        TitleAnimation::SlideUp => "Salita",
-        TitleAnimation::Scale => "Scala",
     }
 }
 
@@ -608,8 +817,4 @@ fn truncate(text: &str, max: usize) -> String {
         out.push('…');
         out
     }
-}
-
-fn format_seconds(ms: u64) -> String {
-    format!("{:.1}s", ms as f32 / 1000.0)
 }

@@ -11,9 +11,12 @@ pub enum Page {
     Titles,
     Live,
     Settings,
+    Gallery,
 }
 
 impl Page {
+    /// Pages shown in the bottom page bar. The component gallery is hidden
+    /// behind the `--gallery` launch flag.
     pub const ALL: [Page; 5] = [
         Page::Library,
         Page::Timeline,
@@ -29,6 +32,19 @@ impl Page {
             Page::Titles => crate::strings::PAGE_TITLES,
             Page::Live => crate::strings::PAGE_LIVE,
             Page::Settings => crate::strings::SETTINGS,
+            Page::Gallery => "Galleria componenti",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "libreria" | "library" => Some(Self::Library),
+            "scaletta" | "timeline" => Some(Self::Timeline),
+            "titoli" | "titles" => Some(Self::Titles),
+            "live" => Some(Self::Live),
+            "impostazioni" | "settings" => Some(Self::Settings),
+            "galleria" | "gallery" => Some(Self::Gallery),
+            _ => None,
         }
     }
 
@@ -39,6 +55,7 @@ impl Page {
             Page::Titles => 2,
             Page::Live => 3,
             Page::Settings => 4,
+            Page::Gallery => 5,
         }
     }
 }

@@ -18,5 +18,13 @@ pub fn show(app: &mut NerdApp, ui: &mut Ui) {
         Page::Titles => titles::show(app, ui),
         Page::Live => live::show(app, ui),
         Page::Settings => settings::show(app, ui),
+        Page::Gallery => {
+            egui::Frame::new()
+                .fill(app.palette.colors.window)
+                .inner_margin(egui::Margin::same(18))
+                .show(ui, |ui| {
+                    nerd_ui_kit::gallery::show(ui, app.system);
+                });
+        }
     }
 }
