@@ -591,6 +591,20 @@ impl Show {
         effects
     }
 
+    /// Updates timing settings without disturbing the current phase. Used for
+    /// mode, gap and fade changes made while the evening is running.
+    pub fn set_config(&mut self, config: ShowConfig) {
+        let background_was_counting_down = self.config.mode != config.mode;
+        self.config = config;
+        if background_was_counting_down
+            && self.phase == Phase::Waiting
+            && self.config.mode == PlaybackMode::Automatic
+            && self.gap_remaining_ms.is_none()
+        {
+            self.gap_remaining_ms = Some(self.config.default_gap_ms);
+        }
+    }
+
     /// Rebuilds the cue list and timing after an edit. Playback stops; the
     /// caller is expected to announce the change to the operator.
     pub fn reconfigure(&mut self, cues: Vec<Cue>, config: ShowConfig) {

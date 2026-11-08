@@ -8,4 +8,5 @@ license.workspace = true
 
 [dependencies]
 nerd-core.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
