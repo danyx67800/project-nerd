@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "nerd-app"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -2683,7 +2683,7 @@ dependencies = [
 
 [[package]]
 name = "nerd-audio"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "audioadapter",
  "audioadapter-buffers",
@@ -2699,7 +2699,7 @@ dependencies = [
 
 [[package]]
 name = "nerd-core"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -2711,7 +2711,7 @@ dependencies = [
 
 [[package]]
 name = "nerd-tools"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -2720,7 +2720,7 @@ dependencies = [
 
 [[package]]
 name = "nerd-ui-kit"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "egui",
  "objc2 0.6.5",
@@ -2730,7 +2730,7 @@ dependencies = [
 
 [[package]]
 name = "nerd-video"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 dependencies = [
  "nerd-core",
  "thiserror 2.0.21",
