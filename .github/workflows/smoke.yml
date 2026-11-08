@@ -1,0 +1,17 @@
+name: Smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ubuntu:
+    name: ubuntu runner
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ubuntu-ok
+
+  macos:
+    name: macos runner
+    runs-on: macos-14
+    steps:
+      - run: echo macos-ok
